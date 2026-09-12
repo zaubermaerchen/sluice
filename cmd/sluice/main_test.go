@@ -16,8 +16,8 @@ func TestRun_Default(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	if got := stdout.String(); got != helloMessage+"\n" {
-		t.Fatalf("expected %q, got %q", helloMessage+"\n", got)
+	if got := stdout.String(); got != "Hello World\n" {
+		t.Fatalf("expected %q, got %q", "Hello World\n", got)
 	}
 
 	if stderr.Len() != 0 {
@@ -35,8 +35,8 @@ func TestRun_Version(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	if got := stdout.String(); got != versionMessage+"\n" {
-		t.Fatalf("expected %q, got %q", versionMessage+"\n", got)
+	if got := stdout.String(); got != "sluice "+version+"\n" {
+		t.Fatalf("expected %q, got %q", "sluice "+version+"\n", got)
 	}
 
 	if stderr.Len() != 0 {

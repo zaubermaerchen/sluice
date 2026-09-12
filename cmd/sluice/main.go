@@ -7,10 +7,7 @@ import (
 	"os"
 )
 
-const (
-	helloMessage   = "Hello World"
-	versionMessage = "sluice dev"
-)
+var version = "dev"
 
 func main() {
 	os.Exit(run(os.Stdout, os.Stderr, os.Args[1:]))
@@ -35,10 +32,10 @@ func run(stdout, stderr io.Writer, args []string) int {
 	}
 
 	if *showVersion {
-		fmt.Fprintln(stdout, versionMessage)
+		fmt.Fprintf(stdout, "sluice %s\n", version)
 		return 0
 	}
 
-	fmt.Fprintln(stdout, helloMessage)
+	fmt.Fprintln(stdout, "Hello World")
 	return 0
 }
