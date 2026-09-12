@@ -110,7 +110,7 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	})
 	if versionSpecified {
 		if !*showVersion || len(args) != 1 || len(fs.Args()) != 0 {
-			fmt.Fprintln(stderr, "sluice: --version cannot be combined with other arguments")
+			fmt.Fprintln(stderr, "sluice: --version must be used alone and set to true")
 			fs.Usage()
 			return 2
 		}

@@ -42,8 +42,8 @@ func TestRun_Version(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
 	}
 
-	if got := stdout.String(); got != "sluice "+version+"\n" {
-		t.Fatalf("expected %q, got %q", "sluice "+version+"\n", got)
+	if got := stdout.String(); got != "sluice dev\n" {
+		t.Fatalf("expected %q, got %q", "sluice dev\n", got)
 	}
 
 	if stderr.Len() != 0 {
@@ -95,27 +95,29 @@ func TestRun_Version_AcceptsGoFlagSpellings(t *testing.T) {
 }
 
 func TestRun_Version_RejectsExtraArguments(t *testing.T) {
+	const wantVersionDiagnostic = "--version must be used alone and set to true"
+
 	normalArgs := []string{"--open", "duration:0s", "--close", "duration:1h", "closed"}
 	tests := []struct {
-		name             string
-		args             []string
-		wantVersionError bool
+		name                  string
+		args                  []string
+		wantVersionDiagnostic bool
 	}{
-		{name: "version then positional", args: []string{"--version", "extra"}},
+		{name: "version then positional", args: []string{"--version", "extra"}, wantVersionDiagnostic: true},
 		{name: "positional then version", args: []string{"extra", "--version"}},
-		{name: "version then valid flags", args: []string{"--version", "--open", "duration:1s", "--close", "duration:1s", "closed"}},
-		{name: "valid flags then version", args: []string{"--open", "duration:1s", "--close", "duration:1s", "--version", "closed"}},
-		{name: "version with mode flag", args: []string{"--version", "--mode", "discard"}},
-		{name: "version repeated", args: []string{"--version", "--version"}},
+		{name: "version then valid flags", args: []string{"--version", "--open", "duration:1s", "--close", "duration:1s", "closed"}, wantVersionDiagnostic: true},
+		{name: "valid flags then version", args: []string{"--open", "duration:1s", "--close", "duration:1s", "--version", "closed"}, wantVersionDiagnostic: true},
+		{name: "version with mode flag", args: []string{"--version", "--mode", "discard"}, wantVersionDiagnostic: true},
+		{name: "version repeated", args: []string{"--version", "--version"}, wantVersionDiagnostic: true},
 		{name: "version with unknown flag", args: []string{"--version", "--unknown"}},
 		{name: "unknown flag then version", args: []string{"--unknown", "--version"}},
-		{name: "short version false", args: []string{"-version=false"}, wantVersionError: true},
-		{name: "long version false", args: []string{"--version=false"}, wantVersionError: true},
-		{name: "version false with valid flags", args: append([]string{"--version=false"}, normalArgs...), wantVersionError: true},
-		{name: "valid flags with version false", args: []string{"--open", "duration:0s", "--close", "duration:1h", "--version=false", "closed"}, wantVersionError: true},
-		{name: "version true then false", args: append([]string{"--version", "--version=false"}, normalArgs...), wantVersionError: true},
-		{name: "version false then true", args: append([]string{"--version=false", "--version"}, normalArgs...), wantVersionError: true},
-		{name: "version false repeated", args: append([]string{"--version=false", "--version=false"}, normalArgs...), wantVersionError: true},
+		{name: "short version false", args: []string{"-version=false"}, wantVersionDiagnostic: true},
+		{name: "long version false", args: []string{"--version=false"}, wantVersionDiagnostic: true},
+		{name: "version false with valid flags", args: append([]string{"--version=false"}, normalArgs...), wantVersionDiagnostic: true},
+		{name: "valid flags with version false", args: []string{"--open", "duration:0s", "--close", "duration:1h", "--version=false", "closed"}, wantVersionDiagnostic: true},
+		{name: "version true then false", args: append([]string{"--version", "--version=false"}, normalArgs...), wantVersionDiagnostic: true},
+		{name: "version false then true", args: append([]string{"--version=false", "--version"}, normalArgs...), wantVersionDiagnostic: true},
+		{name: "version false repeated", args: append([]string{"--version=false", "--version=false"}, normalArgs...), wantVersionDiagnostic: true},
 	}
 
 	for _, test := range tests {
@@ -134,8 +136,8 @@ func TestRun_Version_RejectsExtraArguments(t *testing.T) {
 			if !strings.Contains(stderr.String(), "Usage of sluice:") {
 				t.Fatalf("expected usage in stderr, got %q", stderr.String())
 			}
-			if test.wantVersionError && !strings.Contains(stderr.String(), "--version cannot be combined with other arguments") {
-				t.Fatalf("expected version combination error in stderr, got %q", stderr.String())
+			if test.wantVersionDiagnostic && !strings.Contains(stderr.String(), "sluice: "+wantVersionDiagnostic+"\n") {
+				t.Fatalf("expected version diagnostic %q in stderr, got %q", wantVersionDiagnostic, stderr.String())
 			}
 			if stdin.read {
 				t.Fatal("expected version validation not to read stdin")
