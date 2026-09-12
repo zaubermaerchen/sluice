@@ -104,7 +104,16 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	}
 
 	// Keep --version as a short circuit so it remains usable without normal-operation arguments.
-	if *showVersion {
+	versionSpecified := false
+	fs.Visit(func(f *flag.Flag) {
+		versionSpecified = versionSpecified || f.Name == "version"
+	})
+	if versionSpecified {
+		if !*showVersion || len(args) != 1 || len(fs.Args()) != 0 {
+			fmt.Fprintln(stderr, "sluice: --version must be used alone and set to true")
+			fs.Usage()
+			return 2
+		}
 		fmt.Fprintf(stdout, "sluice %s\n", version)
 		return 0
 	}
