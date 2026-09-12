@@ -34,8 +34,9 @@ func TestRun_MissingNormalOperationArguments(t *testing.T) {
 func TestRun_Version(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	stdin := &trackingReader{}
 
-	exitCode := runWithIO(strings.NewReader("must not be read"), &stdout, &stderr, []string{"--version"})
+	exitCode := runWithIO(stdin, &stdout, &stderr, []string{"--version"})
 
 	if exitCode != 0 {
 		t.Fatalf("expected exit code 0, got %d", exitCode)
@@ -47,6 +48,99 @@ func TestRun_Version(t *testing.T) {
 
 	if stderr.Len() != 0 {
 		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	if stdin.read {
+		t.Fatal("expected version mode not to read stdin")
+	}
+}
+
+func TestRun_Version_UsesInjectedValue(t *testing.T) {
+	previousVersion := version
+	version = "1.2.3"
+	defer func() { version = previousVersion }()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithIO(&trackingReader{}, &stdout, &stderr, []string{"--version"})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+	if got := stdout.String(); got != "sluice 1.2.3\n" {
+		t.Fatalf("expected %q, got %q", "sluice 1.2.3\n", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
+func TestRun_Version_AcceptsGoFlagSpellings(t *testing.T) {
+	for _, arg := range []string{"-version", "--version", "-version=true", "--version=true"} {
+		t.Run(arg, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := runWithIO(&trackingReader{}, &stdout, &stderr, []string{arg})
+			if exitCode != 0 {
+				t.Fatalf("expected exit code 0, got %d; stderr=%q", exitCode, stderr.String())
+			}
+			if got := stdout.String(); got != "sluice "+version+"\n" {
+				t.Fatalf("expected %q, got %q", "sluice "+version+"\n", got)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("expected empty stderr, got %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRun_Version_RejectsExtraArguments(t *testing.T) {
+	normalArgs := []string{"--open", "duration:0s", "--close", "duration:1h", "closed"}
+	tests := []struct {
+		name             string
+		args             []string
+		wantVersionError bool
+	}{
+		{name: "version then positional", args: []string{"--version", "extra"}},
+		{name: "positional then version", args: []string{"extra", "--version"}},
+		{name: "version then valid flags", args: []string{"--version", "--open", "duration:1s", "--close", "duration:1s", "closed"}},
+		{name: "valid flags then version", args: []string{"--open", "duration:1s", "--close", "duration:1s", "--version", "closed"}},
+		{name: "version with mode flag", args: []string{"--version", "--mode", "discard"}},
+		{name: "version repeated", args: []string{"--version", "--version"}},
+		{name: "version with unknown flag", args: []string{"--version", "--unknown"}},
+		{name: "unknown flag then version", args: []string{"--unknown", "--version"}},
+		{name: "short version false", args: []string{"-version=false"}, wantVersionError: true},
+		{name: "long version false", args: []string{"--version=false"}, wantVersionError: true},
+		{name: "version false with valid flags", args: append([]string{"--version=false"}, normalArgs...), wantVersionError: true},
+		{name: "valid flags with version false", args: []string{"--open", "duration:0s", "--close", "duration:1h", "--version=false", "closed"}, wantVersionError: true},
+		{name: "version true then false", args: append([]string{"--version", "--version=false"}, normalArgs...), wantVersionError: true},
+		{name: "version false then true", args: append([]string{"--version=false", "--version"}, normalArgs...), wantVersionError: true},
+		{name: "version false repeated", args: append([]string{"--version=false", "--version=false"}, normalArgs...), wantVersionError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			stdin := &trackingReader{}
+
+			exitCode := runWithIO(stdin, &stdout, &stderr, test.args)
+			if exitCode != 2 {
+				t.Fatalf("expected usage exit code 2, got %d; stderr=%q", exitCode, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected empty stdout, got %q", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "Usage of sluice:") {
+				t.Fatalf("expected usage in stderr, got %q", stderr.String())
+			}
+			if test.wantVersionError && !strings.Contains(stderr.String(), "--version cannot be combined with other arguments") {
+				t.Fatalf("expected version combination error in stderr, got %q", stderr.String())
+			}
+			if stdin.read {
+				t.Fatal("expected version validation not to read stdin")
+			}
+		})
 	}
 }
 
@@ -408,6 +502,15 @@ type errorReader struct {
 
 func (r errorReader) Read([]byte) (int, error) {
 	return 0, r.err
+}
+
+type trackingReader struct {
+	read bool
+}
+
+func (r *trackingReader) Read([]byte) (int, error) {
+	r.read = true
+	return 0, io.EOF
 }
 
 type errorWriter struct {
