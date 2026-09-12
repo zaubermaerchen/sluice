@@ -1,0 +1,12 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4
+
+[features.multi_agent_v2]
+enabled = true
+hide_spawn_agent_metadata = false
+tool_namespace = "agents"
+max_concurrent_threads_per_session = 6
+min_wait_timeout_ms = 60000
+default_wait_timeout_ms = 120000
+max_wait_timeout_ms = 600000
