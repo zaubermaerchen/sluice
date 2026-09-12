@@ -56,17 +56,17 @@ func TestRun_Help(t *testing.T) {
 				t.Fatalf("expected exit code 0, got %d", exitCode)
 			}
 
-			got := stdout.String()
+			if stdout.Len() != 0 {
+				t.Fatalf("expected empty stdout, got %q", stdout.String())
+			}
+
+			got := stderr.String()
 			if !strings.Contains(got, "Usage of sluice:") {
-				t.Fatalf("expected usage in stdout, got %q", got)
+				t.Fatalf("expected usage in stderr, got %q", got)
 			}
 
 			if !strings.Contains(got, "-version") {
 				t.Fatalf("expected version flag in usage, got %q", got)
-			}
-
-			if stderr.Len() != 0 {
-				t.Fatalf("expected empty stderr, got %q", stderr.String())
 			}
 		})
 	}
@@ -93,5 +93,29 @@ func TestRun_InvalidFlag(t *testing.T) {
 
 	if !strings.Contains(got, "Usage of sluice:") {
 		t.Fatalf("expected usage in stderr, got %q", got)
+	}
+}
+
+func TestRun_HelpWithInvalidFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run(&stdout, &stderr, []string{"--help", "--unknown"})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "Usage of sluice:") {
+		t.Fatalf("expected usage in stderr, got %q", got)
+	}
+
+	if strings.Contains(got, "flag provided but not defined") {
+		t.Fatalf("did not expect invalid flag error when help is requested, got %q", got)
 	}
 }
