@@ -261,6 +261,26 @@ func (r *blockProbeReader) Read(p []byte) (int, error) {
 	return r.read(p)
 }
 
+func closeOnce(ch chan struct{}) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() { close(ch) })
+	}
+}
+
+type eofGateReader struct {
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+}
+
+func (r *eofGateReader) Read(p []byte) (int, error) {
+	r.startOnce.Do(func() { close(r.started) })
+	<-r.release
+	p[0] = 'x'
+	return 1, io.EOF
+}
+
 func TestRun_DurationOpensClosedStream(t *testing.T) {
 	const input = "opened by duration\n"
 	var stdout bytes.Buffer
@@ -642,6 +662,198 @@ func TestRun_SameSignalRepeatedlyTogglesState(t *testing.T) {
 	}
 	if got := stdout.String(); got != "first\nsecond\n" {
 		t.Fatalf("expected bytes from both open intervals, got %q", got)
+	}
+}
+
+func TestRun_EOFObservedDuringOpenReadCompletesAfterCloseTransition(t *testing.T) {
+	input := &eofGateReader{started: make(chan struct{}), release: make(chan struct{})}
+	releaseInput := closeOnce(input.release)
+	output := newFirstWriteGate(&bytes.Buffer{})
+	var stderr bytes.Buffer
+	firstEvent := make(chan struct{}, 1)
+	nextEvent := make(chan struct{}, 1)
+	nextArmEntered := make(chan struct{})
+	allowNextArm := make(chan struct{})
+	var allowNextArmOnce sync.Once
+	allowArm := func() {
+		allowNextArmOnce.Do(func() { close(allowNextArm) })
+	}
+	var armCalls int
+	arm := func(event) (armedEvent, error) {
+		armCalls++
+		switch armCalls {
+		case 1:
+			return armedEvent{ch: firstEvent, stop: func() {}}, nil
+		case 2:
+			close(nextArmEntered)
+			<-allowNextArm
+			return armedEvent{ch: nextEvent, stop: func() {}}, nil
+		default:
+			return armedEvent{}, errors.New("unexpected extra arm")
+		}
+	}
+	cfg := config{
+		mode:    modeBlock,
+		open:    event{kind: eventSignal, signal: "USR1"},
+		close:   event{kind: eventSignal, signal: "USR2"},
+		initial: stateOpen,
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- runStateMachineWithArmer(input, output, &stderr, cfg, arm)
+	}()
+	finished := false
+	defer func() {
+		releaseInput()
+		output.release()
+		allowArm()
+		select {
+		case nextEvent <- struct{}{}:
+		default:
+		}
+		if !finished {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	select {
+	case <-input.started:
+	case <-time.After(time.Second):
+		t.Fatal("open read did not start")
+	}
+	releaseInput()
+	if !output.waitForWrite(time.Second) {
+		t.Fatal("copy did not reach the gated write")
+	}
+	firstEvent <- struct{}{}
+	select {
+	case <-nextArmEntered:
+	case <-time.After(time.Second):
+		t.Fatal("close transition did not attempt to arm the next event")
+	}
+	output.release()
+	allowArm()
+
+	select {
+	case exitCode := <-done:
+		finished = true
+		if exitCode != 0 {
+			t.Fatalf("expected successful EOF exit, got %d; stderr=%q", exitCode, stderr.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("EOF observed by an open read waited for a later open event")
+	}
+}
+
+func TestRun_ArmsNextEventBeforePublishingState(t *testing.T) {
+	firstReadStarted := make(chan struct{})
+	secondReadStarted := make(chan struct{})
+	releaseFirstRead := make(chan struct{})
+	releaseSecondRead := make(chan struct{})
+	closeFirstRead := closeOnce(releaseFirstRead)
+	closeSecondRead := closeOnce(releaseSecondRead)
+	var readCount int
+	input := &blockProbeReader{read: func([]byte) (int, error) {
+		readCount++
+		switch readCount {
+		case 1:
+			close(firstReadStarted)
+			<-releaseFirstRead
+			return 0, nil
+		case 2:
+			close(secondReadStarted)
+			<-releaseSecondRead
+			return 0, io.EOF
+		default:
+			return 0, errors.New("unexpected extra read")
+		}
+	}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	initialEvent := make(chan struct{}, 1)
+	initialEvent <- struct{}{}
+	transitionEvent := make(chan struct{}, 1)
+	nextEvent := make(chan struct{}, 1)
+	nextArmEntered := make(chan struct{})
+	allowNextArm := make(chan struct{})
+	var allowNextArmOnce sync.Once
+	allowArm := func() {
+		allowNextArmOnce.Do(func() { close(allowNextArm) })
+	}
+	var armCalls int
+	arm := func(event) (armedEvent, error) {
+		armCalls++
+		switch armCalls {
+		case 1:
+			return armedEvent{ch: initialEvent, stop: func() {}}, nil
+		case 2:
+			return armedEvent{ch: transitionEvent, stop: func() {}}, nil
+		case 3:
+			close(nextArmEntered)
+			<-allowNextArm
+			return armedEvent{ch: nextEvent, stop: func() {}}, nil
+		default:
+			return armedEvent{}, errors.New("unexpected extra arm")
+		}
+	}
+	cfg := config{
+		mode:    modeBlock,
+		open:    event{kind: eventDuration, duration: time.Hour},
+		close:   event{kind: eventSignal, signal: "USR2"},
+		initial: stateClosed,
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- runStateMachineWithArmer(input, &stdout, &stderr, cfg, arm)
+	}()
+	finished := false
+	defer func() {
+		closeFirstRead()
+		closeSecondRead()
+		allowArm()
+		select {
+		case nextEvent <- struct{}{}:
+		default:
+		}
+		if !finished {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	select {
+	case <-firstReadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("initial open read did not start")
+	}
+	transitionEvent <- struct{}{}
+	select {
+	case <-nextArmEntered:
+	case <-time.After(time.Second):
+		t.Fatal("open transition did not attempt to arm the next event")
+	}
+	closeFirstRead()
+	select {
+	case <-secondReadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reader stayed disabled while the next event was being armed")
+	}
+	allowArm()
+	closeSecondRead()
+
+	select {
+	case exitCode := <-done:
+		finished = true
+		if exitCode != 0 {
+			t.Fatalf("expected successful EOF exit, got %d; stderr=%q", exitCode, stderr.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run did not finish after the source reached EOF")
 	}
 }
 

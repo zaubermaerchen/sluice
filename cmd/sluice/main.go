@@ -230,19 +230,22 @@ func armEvent(e event) (armedEvent, error) {
 }
 
 type gatedReader struct {
-	source  io.Reader
-	mu      sync.Mutex
-	enabled bool
-	changed chan struct{}
+	source        io.Reader
+	mu            sync.Mutex
+	enabled       bool
+	readState     streamState
+	lastReadState streamState
+	changed       chan struct{}
 }
 
 func newGatedReader(source io.Reader) *gatedReader {
-	return &gatedReader{source: source, changed: make(chan struct{})}
+	return &gatedReader{source: source, readState: stateClosed, lastReadState: stateClosed, changed: make(chan struct{})}
 }
 
-func (r *gatedReader) setEnabled(enabled bool) {
+func (r *gatedReader) setState(state streamState, enabled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.readState = state
 	if r.enabled == enabled {
 		return
 	}
@@ -256,6 +259,7 @@ func (r *gatedReader) Read(p []byte) (int, error) {
 		r.mu.Lock()
 		if r.enabled {
 			source := r.source
+			r.lastReadState = r.readState
 			r.mu.Unlock()
 			return source.Read(p)
 		}
@@ -306,7 +310,18 @@ func newStream(source io.Reader, destination io.Writer, mode streamMode) *stream
 
 func (s *stream) setState(state streamState) {
 	s.writer.setState(state)
-	s.reader.setEnabled(state == stateOpen || s.mode == modeDiscard)
+	s.reader.setState(state, state == stateOpen || s.mode == modeDiscard)
+}
+
+func (r *gatedReader) lastReadStateValue() streamState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastReadState
+}
+
+type copyOutcome struct {
+	err       error
+	readState streamState
 }
 
 func runStateMachine(stdin io.Reader, stdout, stderr io.Writer, cfg config) int {
@@ -347,21 +362,21 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 	}
 
 	stream.setState(state)
-	copyResult := make(chan error, 1)
+	copyResult := make(chan copyOutcome, 1)
 	go func() {
 		_, err := io.Copy(stream.writer, stream.reader)
-		copyResult <- err
+		copyResult <- copyOutcome{err: err, readState: stream.reader.lastReadStateValue()}
 	}()
 
 	eofPending := false
 	for {
 		select {
-		case err := <-copyResult:
-			if err != nil {
-				fmt.Fprintf(stderr, "sluice: I/O error: %v\n", err)
+		case result := <-copyResult:
+			if result.err != nil {
+				fmt.Fprintf(stderr, "sluice: I/O error: %v\n", result.err)
 				return 1
 			}
-			if state == stateOpen || cfg.mode == modeDiscard {
+			if state == stateOpen || result.readState == stateOpen || cfg.mode == modeDiscard {
 				return 0
 			}
 			// A block-mode reader may have reached EOF in a Read that began
@@ -370,22 +385,22 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 			eofPending = true
 
 		case <-armed.ch:
-			armed.stop()
+			nextState := stateOpen
 			if state == stateOpen {
-				state = stateClosed
-			} else {
-				state = stateOpen
+				nextState = stateClosed
 			}
-			stream.setState(state)
-			if eofPending && (state == stateOpen || cfg.mode == modeDiscard) {
-				return 0
-			}
-			next, armErr := arm(eventForState(cfg, state))
+			next, armErr := arm(eventForState(cfg, nextState))
 			if armErr != nil {
 				fmt.Fprintf(stderr, "sluice: cannot arm event: %v\n", armErr)
 				return 1
 			}
+			armed.stop()
 			armed = next
+			state = nextState
+			stream.setState(state)
+			if eofPending && (state == stateOpen || cfg.mode == modeDiscard) {
+				return 0
+			}
 		}
 	}
 }
