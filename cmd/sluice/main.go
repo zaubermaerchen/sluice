@@ -83,10 +83,6 @@ func run(stdout, stderr io.Writer, args []string) int {
 func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	fs := flag.NewFlagSet("sluice", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
-		fs.PrintDefaults()
-	}
 
 	showVersion := fs.Bool("version", false, "show version")
 	var modeValue = singleValue{value: "block"}
@@ -95,6 +91,26 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	fs.Var(&modeValue, "mode", "stream mode (block|discard)")
 	fs.Var(&openValue, "open", "event that opens the sluice")
 	fs.Var(&closeValue, "close", "event that closes the sluice")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fmt.Fprintln(fs.Output(), "  sluice [--mode block|discard] --open EVENT --close EVENT open|closed")
+		fmt.Fprintln(fs.Output(), "")
+		fmt.Fprintln(fs.Output(), "open|closed is the initial stream state: open forwards stdin; closed starts closed.")
+		fmt.Fprintln(fs.Output(), "Events:")
+		fmt.Fprintln(fs.Output(), "  signal event forms and examples are POSIX-only.")
+		fmt.Fprintln(fs.Output(), "  signal:USR1 / signal:SIGUSR1")
+		fmt.Fprintln(fs.Output(), "  signal:USR2 / signal:SIGUSR2")
+		fmt.Fprintln(fs.Output(), "  duration:DURATION")
+		fmt.Fprintln(fs.Output(), "Modes:")
+		fmt.Fprintln(fs.Output(), "  block: do not read stdin while closed; propagates backpressure upstream")
+		fmt.Fprintln(fs.Output(), "  discard: read and discard stdin while closed")
+		fmt.Fprintln(fs.Output(), "Examples:")
+		fmt.Fprintln(fs.Output(), "  sluice --open signal:USR1 --close signal:USR2 closed")
+		fmt.Fprintln(fs.Output(), "  sluice --open signal:USR1 --close signal:USR1 closed")
+		fmt.Fprintln(fs.Output(), "  sluice --open duration:5s --close duration:10s closed")
+		fmt.Fprintln(fs.Output(), "")
+		fs.PrintDefaults()
+	}
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {

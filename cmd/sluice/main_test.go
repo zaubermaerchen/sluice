@@ -527,12 +527,28 @@ var _ io.Reader = errorReader{}
 var _ io.Writer = errorWriter{}
 
 func TestRun_Help(t *testing.T) {
+	wantContent := []string{
+		"  sluice [--mode block|discard] --open EVENT --close EVENT open|closed",
+		"open|closed is the initial stream state",
+		"signal event forms and examples are POSIX-only",
+		"signal:USR1 / signal:SIGUSR1",
+		"signal:USR2 / signal:SIGUSR2",
+		"duration:DURATION",
+		"block: do not read stdin while closed; propagates backpressure upstream",
+		"discard: read and discard stdin while closed",
+		"sluice --open signal:USR1 --close signal:USR2 closed",
+		"sluice --open signal:USR1 --close signal:USR1 closed",
+		"sluice --open duration:5s --close duration:10s closed",
+		"(default block)",
+	}
+
 	for _, args := range [][]string{{"-h"}, {"--help"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
+			stdin := &trackingReader{}
 
-			exitCode := run(&stdout, &stderr, args)
+			exitCode := runWithIO(stdin, &stdout, &stderr, args)
 
 			if exitCode != 0 {
 				t.Fatalf("expected exit code 0, got %d", exitCode)
@@ -546,9 +562,21 @@ func TestRun_Help(t *testing.T) {
 			if !strings.Contains(got, "Usage of sluice:") {
 				t.Fatalf("expected usage in stderr, got %q", got)
 			}
+			if strings.Contains(got, "Usage: sluice") {
+				t.Fatalf("expected one usage heading, got %q", got)
+			}
+
+			for _, content := range wantContent {
+				if !strings.Contains(got, content) {
+					t.Fatalf("expected help to contain %q, got %q", content, got)
+				}
+			}
 
 			if !strings.Contains(got, "-version") {
 				t.Fatalf("expected version flag in usage, got %q", got)
+			}
+			if stdin.read {
+				t.Fatal("expected help mode not to read stdin")
 			}
 		})
 	}
