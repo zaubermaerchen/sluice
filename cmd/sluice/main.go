@@ -346,18 +346,18 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 	// loop instead of spinning during startup.
 	select {
 	case <-armed.ch:
-		armed.stop()
+		nextState := stateOpen
 		if state == stateOpen {
-			state = stateClosed
-		} else {
-			state = stateOpen
+			nextState = stateClosed
 		}
-		next, armErr := arm(eventForState(cfg, state))
+		next, armErr := arm(eventForState(cfg, nextState))
 		if armErr != nil {
 			fmt.Fprintf(stderr, "sluice: cannot arm event: %v\n", armErr)
 			return 1
 		}
+		armed.stop()
 		armed = next
+		state = nextState
 	default:
 	}
 

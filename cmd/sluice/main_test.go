@@ -857,6 +857,103 @@ func TestRun_ArmsNextEventBeforePublishingState(t *testing.T) {
 	}
 }
 
+func TestRun_StartupArmsNextEventBeforeStoppingCurrent(t *testing.T) {
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	releaseInput := closeOnce(releaseRead)
+	var readStartOnce sync.Once
+	input := &blockProbeReader{read: func([]byte) (int, error) {
+		readStartOnce.Do(func() { close(readStarted) })
+		<-releaseRead
+		return 0, io.EOF
+	}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	initialEvent := make(chan struct{}, 1)
+	initialEvent <- struct{}{}
+	firstStopped := make(chan struct{})
+	secondArmEntered := make(chan struct{})
+	allowSecondArm := make(chan struct{})
+	var allowSecondArmOnce sync.Once
+	allowArm := func() {
+		allowSecondArmOnce.Do(func() { close(allowSecondArm) })
+	}
+	var armCalls int
+	arm := func(event) (armedEvent, error) {
+		armCalls++
+		switch armCalls {
+		case 1:
+			return armedEvent{ch: initialEvent, stop: closeOnce(firstStopped)}, nil
+		case 2:
+			close(secondArmEntered)
+			<-allowSecondArm
+			return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
+		default:
+			return armedEvent{}, errors.New("unexpected extra arm")
+		}
+	}
+	cfg := config{
+		mode:    modeBlock,
+		open:    event{kind: eventDuration, duration: time.Hour},
+		close:   event{kind: eventDuration, duration: time.Hour},
+		initial: stateClosed,
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- runStateMachineWithArmer(input, &stdout, &stderr, cfg, arm)
+	}()
+	finished := false
+	defer func() {
+		allowArm()
+		releaseInput()
+		if !finished {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	select {
+	case <-secondArmEntered:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not attempt to arm the next event")
+	}
+	select {
+	case <-firstStopped:
+		t.Fatal("startup stopped the current event before arming the next event")
+	default:
+	}
+	select {
+	case <-readStarted:
+		t.Fatal("startup published the new state before arming the next event")
+	default:
+	}
+
+	allowArm()
+	select {
+	case <-firstStopped:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not stop the current event after arming the next event")
+	}
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reader did not start after the next event was armed")
+	}
+	releaseInput()
+
+	select {
+	case exitCode := <-done:
+		finished = true
+		if exitCode != 0 {
+			t.Fatalf("expected successful EOF exit, got %d; stderr=%q", exitCode, stderr.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run did not finish after startup transition")
+	}
+}
+
 func TestRun_DurationStartsWhenStateIsEntered(t *testing.T) {
 	if !testSignalsSupported() {
 		t.Skip("process signals are not supported on this platform")
