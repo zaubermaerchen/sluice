@@ -71,3 +71,27 @@ func TestRun_Help(t *testing.T) {
 		})
 	}
 }
+
+func TestRun_InvalidFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run(&stdout, &stderr, []string{"--unknown"})
+
+	if exitCode != 2 {
+		t.Fatalf("expected exit code 2, got %d", exitCode)
+	}
+
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "flag provided but not defined: -unknown") {
+		t.Fatalf("expected invalid flag error in stderr, got %q", got)
+	}
+
+	if !strings.Contains(got, "Usage of sluice:") {
+		t.Fatalf("expected usage in stderr, got %q", got)
+	}
+}

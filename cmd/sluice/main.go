@@ -18,7 +18,7 @@ func main() {
 
 func run(stdout, stderr io.Writer, args []string) int {
 	fs := flag.NewFlagSet("sluice", flag.ContinueOnError)
-	fs.SetOutput(stdout)
+	fs.SetOutput(stderr)
 
 	showVersion := fs.Bool("version", false, "show version")
 	fs.Usage = func() {
@@ -26,12 +26,17 @@ func run(stdout, stderr io.Writer, args []string) int {
 		fs.PrintDefaults()
 	}
 
+	if wantsHelp(args) {
+		fs.SetOutput(stdout)
+		fs.Usage()
+		return 0
+	}
+
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
 
-		fmt.Fprintln(stderr, err)
 		return 2
 	}
 
@@ -42,4 +47,14 @@ func run(stdout, stderr io.Writer, args []string) int {
 
 	fmt.Fprintln(stdout, helloMessage)
 	return 0
+}
+
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+
+	return false
 }
