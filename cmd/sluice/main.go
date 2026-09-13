@@ -370,9 +370,8 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 		armed.stop()
 	}()
 	// Resolve one already-ready event before enabling stdin. This makes a zero
-	// duration transition immediate even when stdin already contains data,
-	// while still allowing two zero-duration events to be handled by the main
-	// loop instead of spinning during startup.
+	// duration transition immediate even when stdin already contains data, and
+	// arms the next event before publishing the transitioned state.
 	select {
 	case <-armed.ch:
 		nextState := stateOpen

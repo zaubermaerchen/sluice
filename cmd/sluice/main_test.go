@@ -410,6 +410,26 @@ func TestRun_DurationOpensClosedStream(t *testing.T) {
 	}
 }
 
+func TestRun_DurationClosesOpenStream(t *testing.T) {
+	const input = "closed by duration\n"
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithIO(strings.NewReader(input), &stdout, &stderr, []string{
+		"--mode", "discard",
+		"--open", "duration:1h",
+		"--close", "duration:0s",
+		"open",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr=%q", exitCode, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected input discarded after immediate close, got %q", stdout.String())
+	}
+}
+
 func TestRun_TwoZeroDurationsAreUsageErrors(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
