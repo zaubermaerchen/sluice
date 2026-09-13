@@ -169,6 +169,10 @@ func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (c
 	if cfg.close, err = parseEvent(closeValue.value); err != nil {
 		return config{}, fmt.Errorf("invalid --close event: %w", err)
 	}
+	if cfg.open.kind == eventDuration && cfg.open.duration == 0 &&
+		cfg.close.kind == eventDuration && cfg.close.duration == 0 {
+		return config{}, errors.New("--open and --close cannot both be zero-duration events")
+	}
 	if err := validateEventPlatform(cfg.open); err != nil {
 		return config{}, fmt.Errorf("invalid --open event: %w", err)
 	}
