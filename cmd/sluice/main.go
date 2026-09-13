@@ -169,6 +169,10 @@ func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (c
 	if cfg.close, err = parseEvent(closeValue.value); err != nil {
 		return config{}, fmt.Errorf("invalid --close event: %w", err)
 	}
+	if cfg.open.kind == eventDuration && cfg.open.duration == 0 &&
+		cfg.close.kind == eventDuration && cfg.close.duration == 0 {
+		return config{}, errors.New("--open and --close cannot both be zero-duration events")
+	}
 	if err := validateEventPlatform(cfg.open); err != nil {
 		return config{}, fmt.Errorf("invalid --open event: %w", err)
 	}
@@ -366,9 +370,8 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 		armed.stop()
 	}()
 	// Resolve one already-ready event before enabling stdin. This makes a zero
-	// duration transition immediate even when stdin already contains data,
-	// while still allowing two zero-duration events to be handled by the main
-	// loop instead of spinning during startup.
+	// duration transition immediate even when stdin already contains data, and
+	// arms the next event before publishing the transitioned state.
 	select {
 	case <-armed.ch:
 		nextState := stateOpen

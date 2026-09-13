@@ -183,6 +183,20 @@ func TestRun_ArgumentValidation(t *testing.T) {
 	}
 }
 
+func TestParseConfig_RejectsTwoZeroDurationEvents(t *testing.T) {
+	mode := singleValue{value: "block"}
+	open := singleValue{value: "duration:0s", set: true}
+	close := singleValue{value: "duration:0s", set: true}
+
+	_, err := parseConfig(mode, open, close, []string{"closed"})
+	if err == nil {
+		t.Fatal("parseConfig unexpectedly accepted two zero-duration events")
+	}
+	if !strings.Contains(err.Error(), "--open and --close cannot both be zero-duration events") {
+		t.Fatalf("expected clear two-zero-duration error, got %v", err)
+	}
+}
+
 func TestParseEvent(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -396,25 +410,40 @@ func TestRun_DurationOpensClosedStream(t *testing.T) {
 	}
 }
 
-func TestRun_TwoZeroDurationsDoNotHangBeforeStarting(t *testing.T) {
+func TestRun_DurationClosesOpenStream(t *testing.T) {
+	const input = "closed by duration\n"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	done := make(chan int, 1)
-	go func() {
-		done <- runWithIO(strings.NewReader(""), &stdout, &stderr, []string{
-			"--open", "duration:0s",
-			"--close", "duration:0s",
-			"closed",
-		})
-	}()
 
-	select {
-	case exitCode := <-done:
-		if exitCode != 0 {
-			t.Fatalf("expected exit code 0, got %d; stderr=%q", exitCode, stderr.String())
-		}
-	case <-time.After(time.Second):
-		t.Fatal("zero-duration transitions did not reach EOF")
+	exitCode := runWithIO(strings.NewReader(input), &stdout, &stderr, []string{
+		"--mode", "discard",
+		"--open", "duration:1h",
+		"--close", "duration:0s",
+		"open",
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr=%q", exitCode, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected input discarded after immediate close, got %q", stdout.String())
+	}
+}
+
+func TestRun_TwoZeroDurationsAreUsageErrors(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithIO(strings.NewReader(""), &stdout, &stderr, []string{
+		"--open", "duration:0s",
+		"--close", "duration:0s",
+		"closed",
+	})
+
+	if exitCode != 2 {
+		t.Fatalf("expected usage exit code 2, got %d; stderr=%q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--open and --close cannot both be zero-duration events") {
+		t.Fatalf("expected two-zero-duration error, got %q", stderr.String())
 	}
 }
 
