@@ -12,6 +12,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+func eventFDPlatform() (bool, []string, string) {
+	return true, []string{"named pipe"}, "PIPE_NOWAIT"
+}
+
 func validateEventDescriptor(fd uintptr) error {
 	handle := windows.Handle(fd)
 	fileType, err := windows.GetFileType(handle)

@@ -67,6 +67,12 @@ its state is entered again.
 
 Use `-h` or `--help` for the command summary. `--version` prints the version
 and must be used by itself, without normal-operation arguments.
+`--describe` prints one deterministic, machine-readable JSON description of the
+current CLI, stream semantics, state machine, and platform capabilities. It
+also must be used by itself; when `--help` is parsed, flag parsing prints help
+before describe validation. Its `schema_version` starts at `1`; consumers
+should ignore unknown fields, while existing field meanings remain compatible
+within a schema version.
 
 ### Lifecycle events
 
@@ -244,8 +250,9 @@ printf '%s\n' 'discarded' |
 - EOF while OPEN exits successfully after forwarded data has been written.
 - EOF while CLOSED in `discard` mode exits successfully after the input is
   drained.
-- CLOSED `block` mode cannot observe EOF until it opens, because it does not
-  read stdin while CLOSED.
+- CLOSED `block` mode does not read stdin while CLOSED, so EOF from the normal
+  CLOSED/block path is deferred until OPEN. A read already in flight can
+  observe EOF according to the transition race.
 
 If a state transition races with a read or write already in flight, those
 boundary bytes follow normal concurrent pipe behavior. `sluice` does not

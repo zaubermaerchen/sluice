@@ -87,6 +87,7 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	fs := flag.NewFlagSet("sluice", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
+	showDescription := fs.Bool("describe", false, "show machine-readable self-description")
 	showVersion := fs.Bool("version", false, "show version")
 	var modeValue = singleValue{value: "block"}
 	var openValue singleValue
@@ -126,11 +127,26 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 		return 2
 	}
 
-	// Keep --version as a short circuit so it remains usable without normal-operation arguments.
+	// Keep standalone meta commands as short circuits so they remain usable without
+	// normal-operation arguments or event setup.
+	describeSpecified := false
 	versionSpecified := false
 	fs.Visit(func(f *flag.Flag) {
+		describeSpecified = describeSpecified || f.Name == "describe"
 		versionSpecified = versionSpecified || f.Name == "version"
 	})
+	if describeSpecified {
+		if !*showDescription || len(args) != 1 || len(fs.Args()) != 0 {
+			fmt.Fprintln(stderr, "sluice: --describe must be used alone and set to true")
+			fs.Usage()
+			return 2
+		}
+		if err := printDescription(stdout); err != nil {
+			fmt.Fprintf(stderr, "sluice: cannot write description: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if versionSpecified {
 		if !*showVersion || len(args) != 1 || len(fs.Args()) != 0 {
 			fmt.Fprintln(stderr, "sluice: --version must be used alone and set to true")
