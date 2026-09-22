@@ -214,6 +214,9 @@ func TestRun_DescribeMetadataDescribesCurrentCLIAndRuntime(t *testing.T) {
 	if document.CLISchema.EventForms[0].Supported != signalsSupportedOnPlatform() {
 		t.Fatalf("signal support = %v, want %v", document.CLISchema.EventForms[0].Supported, signalsSupportedOnPlatform())
 	}
+	if !describeContainsString(document.CLISchema.EventForms[0].UnsupportedOn, "zos") {
+		t.Errorf("signal unsupported_on = %#v, missing zos", document.CLISchema.EventForms[0].UnsupportedOn)
+	}
 	if !document.CLISchema.EventForms[0].Supported {
 		if len(document.CLISchema.EventForms[0].UnsupportedOn) == 0 {
 			t.Errorf("signal event form unsupported_on = %#v, want current platform", document.CLISchema.EventForms[0].UnsupportedOn)
