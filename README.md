@@ -30,7 +30,7 @@ provide platform archives containing the binary, `LICENSE`, and this
 ## Usage
 
 ```text
-sluice [--mode block|discard] --open EVENT --close EVENT open|closed
+sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed
 ```
 
 The final argument is the initial state:
@@ -67,6 +67,53 @@ its state is entered again.
 
 Use `-h` or `--help` for the command summary. `--version` prints the version
 and must be used by itself, without normal-operation arguments.
+
+### Lifecycle events
+
+Pass `--events-fd N` (or `--events-fd=N`) to write committed stream
+transitions as JSON Lines to file descriptor `N`, which must be at least 3:
+
+```json
+{"event":"stream-open","timestamp":"2026-09-21T12:00:00.123456789Z"}
+```
+
+The event stream reports `stream-open` and `stream-closed` transitions in
+order. The initial state and EOF do not produce events. Timestamps are UTC in
+RFC3339Nano format. The descriptor is duplicated and remains owned by the
+caller. On Unix, it must be a writable FIFO or socket that is already in
+`O_NONBLOCK` mode. On Windows, it must be a named pipe that is already in
+`PIPE_NOWAIT` mode. `sluice` checks this at startup and exits with status 2
+before reading stdin when the descriptor is unsuitable. Keep the mode enabled
+while `sluice` is running because the duplicate shares the descriptor's open
+file description; `sluice` does not change the caller's descriptor flags.
+
+Event writes are immediate and nonblocking. If the descriptor cannot accept an
+event, `sluice` warns once on stderr, disables further event output, and
+continues its normal stream behavior. A failed nonblocking socket write may
+leave a partial final JSON line; consumers should discard an incomplete line
+after an event-stream failure.
+
+For example, a Unix caller can create a nonblocking event pipe and pass its
+write end to `sluice`:
+
+```sh
+python3 - <<'PY'
+import os
+import subprocess
+
+events_r, events_w = os.pipe()
+os.set_blocking(events_w, False)
+process = subprocess.Popen(
+    ["./sluice", "--events-fd", str(events_w), "--open", "duration:0s",
+     "--close", "duration:1h", "closed"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, pass_fds=(events_w,))
+os.close(events_w)
+stdout, _ = process.communicate(b"forwarded\n")
+events = os.fdopen(events_r, "rb").read()
+print(stdout.decode(), end="")
+print(events.decode(), end="")
+PY
+```
 
 ## Examples
 
