@@ -12,13 +12,28 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func validateEventDescriptor(fd int) error {
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+// Unix descriptor syscalls use a signed 32-bit kernel descriptor even when
+// Go's int and uintptr are wider.
+const maxUnixEventFD = 1<<31 - 1
+
+func unixEventFD(fd uintptr) (int, error) {
+	if fd > maxUnixEventFD {
+		return 0, errors.New("event file descriptor exceeds the Unix 32-bit range")
+	}
+	return int(fd), nil
+}
+
+func validateEventDescriptor(fd uintptr) error {
+	fdInt, err := unixEventFD(fd)
+	if err != nil {
+		return err
+	}
+	flags, err := unix.FcntlInt(uintptr(fdInt), unix.F_GETFL, 0)
 	if err != nil {
 		return err
 	}
 	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil {
+	if err := unix.Fstat(fdInt, &stat); err != nil {
 		return err
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFIFO && stat.Mode&unix.S_IFMT != unix.S_IFSOCK {
@@ -33,11 +48,15 @@ func validateEventDescriptor(fd int) error {
 	return nil
 }
 
-func duplicateEventFile(fd int) (*os.File, error) {
+func duplicateEventFile(fd uintptr) (*os.File, error) {
+	fdInt, err := unixEventFD(fd)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateEventDescriptor(fd); err != nil {
 		return nil, err
 	}
-	ownedFD, err := unix.Dup(fd)
+	ownedFD, err := unix.Dup(fdInt)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +84,12 @@ func writeEvent(file *os.File, data []byte) (int, error) {
 	var written int
 	var writeErr error
 	if err := connection.Control(func(raw uintptr) {
-		fd := int(raw)
-		if err := validateEventDescriptor(fd); err != nil {
+		fd, err := unixEventFD(raw)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		if err := validateEventDescriptor(raw); err != nil {
 			writeErr = err
 			return
 		}

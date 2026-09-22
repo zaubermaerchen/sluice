@@ -11,11 +11,11 @@ import (
 
 var errEventFDUnsupported = errors.New("event file descriptors are unsupported on this platform")
 
-func validateEventDescriptor(int) error {
+func validateEventDescriptor(uintptr) error {
 	return errEventFDUnsupported
 }
 
-func duplicateEventFile(int) (*os.File, error) {
+func duplicateEventFile(uintptr) (*os.File, error) {
 	return nil, errEventFDUnsupported
 }
 

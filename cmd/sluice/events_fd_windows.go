@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func validateEventDescriptor(fd int) error {
+func validateEventDescriptor(fd uintptr) error {
 	handle := windows.Handle(fd)
 	fileType, err := windows.GetFileType(handle)
 	if err != nil {
@@ -31,7 +31,7 @@ func validateEventDescriptor(fd int) error {
 	return nil
 }
 
-func duplicateEventFile(fd int) (*os.File, error) {
+func duplicateEventFile(fd uintptr) (*os.File, error) {
 	if err := validateEventDescriptor(fd); err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func writeEvent(file *os.File, data []byte) (int, error) {
 	var writeErr error
 	if err := connection.Control(func(raw uintptr) {
 		handle := windows.Handle(raw)
-		if err := validateEventDescriptor(int(handle)); err != nil {
+		if err := validateEventDescriptor(uintptr(handle)); err != nil {
 			writeErr = err
 			return
 		}

@@ -22,12 +22,16 @@ type testLifecycleEvent struct {
 type testEventSink struct {
 	reader *os.File
 	writer *os.File
-	fd     int
+	fd     uintptr
 }
 
 type ioDiscardLocked struct{}
 
 func (ioDiscardLocked) Write(p []byte) (int, error) { return len(p), nil }
+
+func formatEventFD(fd uintptr) string {
+	return strconv.FormatUint(uint64(fd), 10)
+}
 
 func (sink *testEventSink) close() {
 	if sink == nil {
@@ -40,9 +44,10 @@ func (sink *testEventSink) close() {
 func TestParseEventsFD(t *testing.T) {
 	for _, test := range []struct {
 		value string
-		want  int
+		want  uintptr
 	}{
 		{value: "3", want: 3},
+		{value: "+3", want: 3},
 		{value: "42", want: 42},
 	} {
 		t.Run(test.value, func(t *testing.T) {
@@ -57,6 +62,28 @@ func TestParseEventsFD(t *testing.T) {
 				t.Fatalf("parseEventsFD(%q) unexpectedly succeeded", value)
 			}
 		})
+	}
+}
+
+func TestParseEventsFDUsesNativeUintptrRange(t *testing.T) {
+	maxUintptr := ^uintptr(0)
+	maxInt := uintptr(^uint(0) >> 1)
+	for _, want := range []uintptr{maxInt + 1, maxUintptr} {
+		value := strconv.FormatUint(uint64(want), 10)
+		t.Run(value, func(t *testing.T) {
+			got, err := parseEventsFD(value)
+			if err != nil {
+				t.Fatalf("parseEventsFD(%q) returned error: %v", value, err)
+			}
+			if uint64(got) != uint64(want) {
+				t.Fatalf("parseEventsFD(%q) = %d, want %d", value, got, want)
+			}
+		})
+	}
+
+	value := strconv.FormatUint(uint64(maxUintptr), 10) + "0"
+	if _, err := parseEventsFD(value); err == nil {
+		t.Fatalf("parseEventsFD(%q) unexpectedly succeeded", value)
 	}
 }
 
@@ -82,7 +109,7 @@ func TestRunEventsFDEmitsCommittedOpenTransition(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	status := runWithIO(strings.NewReader("forwarded"), &stdout, &stderr, []string{
-		"--events-fd=" + strconv.Itoa(events.fd),
+		"--events-fd=" + formatEventFD(events.fd),
 		"--open", "duration:0s",
 		"--close", "duration:1h",
 		"closed",
@@ -101,7 +128,7 @@ func TestRunEventsFDEmitsCommittedCloseTransition(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	status := runWithIO(strings.NewReader("discarded"), &stdout, &stderr, []string{
-		"--events-fd", strconv.Itoa(events.fd),
+		"--events-fd", formatEventFD(events.fd),
 		"--mode", "discard",
 		"--open", "duration:1h",
 		"--close", "duration:0s",
@@ -208,7 +235,7 @@ func TestRunEventsFDDoesNotEmitInitialStateOrEOFTransitions(t *testing.T) {
 			events := newTestEventSink(t)
 			args := append([]string{
 				"--events-fd",
-				strconv.Itoa(events.fd),
+				formatEventFD(events.fd),
 			}, test.args...)
 			var stdout, stderr bytes.Buffer
 			if status := runWithIO(strings.NewReader("input"), &stdout, &stderr, args); status != 0 {
@@ -225,7 +252,7 @@ func TestRunEventsFDWriteSetupFailureRejectsBeforeReading(t *testing.T) {
 	stdin := &trackingReader{}
 	var stdout, stderr bytes.Buffer
 	status := runWithIO(stdin, &stdout, &stderr, []string{
-		"--events-fd", strconv.Itoa(int(^uint(0) >> 1)),
+		"--events-fd", formatEventFD(^uintptr(0) >> 1),
 		"--open", "duration:1h",
 		"--close", "duration:1h",
 		"open",

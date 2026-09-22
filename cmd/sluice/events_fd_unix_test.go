@@ -25,8 +25,8 @@ func newTestEventSink(t *testing.T) *testEventSink {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fd := int(writer.Fd())
-	if err := unix.SetNonblock(fd, true); err != nil {
+	fd := writer.Fd()
+	if err := unix.SetNonblock(int(fd), true); err != nil {
 		_ = reader.Close()
 		_ = writer.Close()
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestEventEmitterClosesOnlyOwnedDescriptor(t *testing.T) {
 func TestEventEmitterProtectsAndDuplicatesCallerDescriptor(t *testing.T) {
 	events := newTestEventSink(t)
 	originalFD := events.fd
-	if _, err := unix.FcntlInt(uintptr(originalFD), unix.F_SETFD, 0); err != nil {
+	if _, err := unix.FcntlInt(originalFD, unix.F_SETFD, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -66,7 +66,7 @@ func TestEventEmitterProtectsAndDuplicatesCallerDescriptor(t *testing.T) {
 	}
 	t.Cleanup(emitter.close)
 	ownedFD := int(emitter.file.Fd())
-	if ownedFD == originalFD {
+	if uintptr(ownedFD) == originalFD {
 		t.Fatalf("owned descriptor = %d, want duplicate of %d", ownedFD, originalFD)
 	}
 	ownedFlags, err := unix.FcntlInt(uintptr(ownedFD), unix.F_GETFD, 0)
@@ -91,7 +91,7 @@ func TestRunEventsFDRejectsUnixRegularFileBeforeReading(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	assertEventFDStartupRejected(t, int(file.Fd()), "FIFO or socket")
+	assertEventFDStartupRejected(t, file.Fd(), "FIFO or socket")
 }
 
 func TestRunEventsFDRejectsUnixBlockingPipeBeforeReading(t *testing.T) {
@@ -101,7 +101,7 @@ func TestRunEventsFDRejectsUnixBlockingPipeBeforeReading(t *testing.T) {
 	}
 	defer reader.Close()
 	defer writer.Close()
-	assertEventFDStartupRejected(t, int(writer.Fd()), "nonblocking")
+	assertEventFDStartupRejected(t, writer.Fd(), "nonblocking")
 }
 
 func TestRunEventsFDRejectsUnixReadOnlyPipeBeforeReading(t *testing.T) {
@@ -114,15 +114,41 @@ func TestRunEventsFDRejectsUnixReadOnlyPipeBeforeReading(t *testing.T) {
 	if err := unix.SetNonblock(int(reader.Fd()), true); err != nil {
 		t.Fatal(err)
 	}
-	assertEventFDStartupRejected(t, int(reader.Fd()), "writable")
+	assertEventFDStartupRejected(t, reader.Fd(), "writable")
 }
 
-func assertEventFDStartupRejected(t *testing.T, fd int, wantDiagnostic string) {
+func TestRunEventsFDRejectsUnixDescriptorThatWouldTruncate(t *testing.T) {
+	if strconv.IntSize != 64 {
+		t.Skip("Unix descriptor truncation alias requires a 64-bit uintptr")
+	}
+	events := newTestEventSink(t)
+	base := uintptr(1)
+	highFD := (base << 32) | events.fd
+	stdin := &trackingReader{}
+	var stdout, stderr bytes.Buffer
+	status := runWithIO(stdin, &stdout, &stderr, []string{
+		"--events-fd", strconv.FormatUint(uint64(highFD), 10),
+		"--open", "duration:1h",
+		"--close", "duration:1h",
+		"open",
+	})
+	if status != 2 {
+		t.Fatalf("run status = %d, want usage error; stderr = %q", status, stderr.String())
+	}
+	if stdin.read {
+		t.Fatal("startup FD validation consumed stdin")
+	}
+	if !strings.Contains(stderr.String(), "32-bit range") {
+		t.Fatalf("stderr = %q, want Unix descriptor range diagnostic", stderr.String())
+	}
+}
+
+func assertEventFDStartupRejected(t *testing.T, fd uintptr, wantDiagnostic string) {
 	t.Helper()
 	stdin := &trackingReader{}
 	var stdout, stderr bytes.Buffer
 	status := runWithIO(stdin, &stdout, &stderr, []string{
-		"--events-fd", strconv.Itoa(fd),
+		"--events-fd", strconv.FormatUint(uint64(fd), 10),
 		"--open", "duration:1h",
 		"--close", "duration:1h",
 		"open",
@@ -146,15 +172,15 @@ func TestRunEventsFDDoesNotWaitForFullConsumer(t *testing.T) {
 	defer readEvents.Close()
 	defer writeEvents.Close()
 
-	writeFD := int(writeEvents.Fd())
-	if err := unix.SetNonblock(writeFD, true); err != nil {
+	writeFD := writeEvents.Fd()
+	if err := unix.SetNonblock(int(writeFD), true); err != nil {
 		t.Fatal(err)
 	}
-	originalFlags, err := unix.FcntlInt(uintptr(writeFD), unix.F_GETFL, 0)
+	originalFlags, err := unix.FcntlInt(writeFD, unix.F_GETFL, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	filler, err := unix.Dup(writeFD)
+	filler, err := unix.Dup(int(writeFD))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +199,7 @@ func TestRunEventsFDDoesNotWaitForFullConsumer(t *testing.T) {
 	status := make(chan int, 1)
 	go func() {
 		status <- runWithIO(strings.NewReader("input"), &output, diagnostics, []string{
-			"--events-fd", strconv.Itoa(writeFD),
+			"--events-fd", strconv.FormatUint(uint64(writeFD), 10),
 			"--open", "duration:0s",
 			"--close", "duration:1h",
 			"closed",
@@ -195,7 +221,7 @@ func TestRunEventsFDDoesNotWaitForFullConsumer(t *testing.T) {
 	if got := strings.Count(diagnostics.String(), "events disabled:"); got != 1 {
 		t.Fatalf("diagnostics = %q, want one events warning", diagnostics.String())
 	}
-	flags, err := unix.FcntlInt(uintptr(writeFD), unix.F_GETFL, 0)
+	flags, err := unix.FcntlInt(writeFD, unix.F_GETFL, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,11 +241,11 @@ func TestEventEmitterWarnsBeforeClose(t *testing.T) {
 	if err := unix.SetNonblock(readFD, true); err != nil {
 		t.Fatal(err)
 	}
-	writeFD := int(writeEvents.Fd())
-	if err := unix.SetNonblock(writeFD, true); err != nil {
+	writeFD := writeEvents.Fd()
+	if err := unix.SetNonblock(int(writeFD), true); err != nil {
 		t.Fatal(err)
 	}
-	filler, err := unix.Dup(writeFD)
+	filler, err := unix.Dup(int(writeFD))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,11 +305,11 @@ func TestRunEventsFDBlockedDiagnosticsDoNotStallStream(t *testing.T) {
 	}
 	defer readEvents.Close()
 	defer writeEvents.Close()
-	writeFD := int(writeEvents.Fd())
-	if err := unix.SetNonblock(writeFD, true); err != nil {
+	writeFD := writeEvents.Fd()
+	if err := unix.SetNonblock(int(writeFD), true); err != nil {
 		t.Fatal(err)
 	}
-	filler, err := unix.Dup(writeFD)
+	filler, err := unix.Dup(int(writeFD))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +328,7 @@ func TestRunEventsFDBlockedDiagnosticsDoNotStallStream(t *testing.T) {
 	status := make(chan int, 1)
 	go func() {
 		status <- runWithIO(strings.NewReader("input"), io.Discard, diagnostics, []string{
-			"--events-fd", strconv.Itoa(writeFD),
+			"--events-fd", strconv.FormatUint(uint64(writeFD), 10),
 			"--open", "duration:0s",
 			"--close", "duration:1h",
 			"closed",
@@ -325,11 +351,11 @@ func TestRunEventsFDWarningIsSerializedWithCopyDiagnostic(t *testing.T) {
 	}
 	defer readEvents.Close()
 	defer writeEvents.Close()
-	writeFD := int(writeEvents.Fd())
-	if err := unix.SetNonblock(writeFD, true); err != nil {
+	writeFD := writeEvents.Fd()
+	if err := unix.SetNonblock(int(writeFD), true); err != nil {
 		t.Fatal(err)
 	}
-	filler, err := unix.Dup(writeFD)
+	filler, err := unix.Dup(int(writeFD))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +384,7 @@ func TestRunEventsFDWarningIsSerializedWithCopyDiagnostic(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		done <- runWithIO(releaseErrorReader{release: copyRelease, err: diagnosticsError{rendered: errorRendered}}, io.Discard, diagnostics, []string{
-			"--events-fd", strconv.Itoa(writeFD),
+			"--events-fd", strconv.FormatUint(uint64(writeFD), 10),
 			"--open", "duration:0s",
 			"--close", "duration:1h",
 			"closed",

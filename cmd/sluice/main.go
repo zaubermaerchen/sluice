@@ -48,7 +48,7 @@ type config struct {
 	open        event
 	close       event
 	initial     streamState
-	eventsFD    int
+	eventsFD    uintptr
 	eventsFDSet bool
 }
 
@@ -220,15 +220,16 @@ func parseConfigWithEventsFD(modeValue, openValue, closeValue, eventsFDValue sin
 	return cfg, nil
 }
 
-func parseEventsFD(value string) (int, error) {
-	fd, err := strconv.Atoi(value)
+func parseEventsFD(value string) (uintptr, error) {
+	parsedValue := strings.TrimPrefix(value, "+")
+	fd, err := strconv.ParseUint(parsedValue, 10, strconv.IntSize)
 	if err != nil {
 		return 0, fmt.Errorf("invalid file descriptor for --events-fd: %w", err)
 	}
 	if fd < 3 {
 		return 0, errors.New("--events-fd must be at least 3")
 	}
-	return fd, nil
+	return uintptr(fd), nil
 }
 
 func parseEvent(value string) (event, error) {

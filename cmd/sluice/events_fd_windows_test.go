@@ -21,7 +21,7 @@ func newTestEventSink(t *testing.T) *testEventSink {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fd := int(writer.Fd())
+	fd := writer.Fd()
 	handle := windows.Handle(fd)
 	var mode uint32
 	if err := windows.GetNamedPipeHandleState(handle, &mode, nil, nil, nil, nil, 0); err != nil {
@@ -113,7 +113,7 @@ func TestRunEventsFDDoesNotWaitForFullWindowsConsumer(t *testing.T) {
 	status := make(chan int, 1)
 	go func() {
 		status <- runWithIO(strings.NewReader("input"), &output, diagnostics, []string{
-			"--events-fd", strconv.Itoa(events.fd),
+			"--events-fd", formatEventFD(events.fd),
 			"--open", "duration:0s",
 			"--close", "duration:1h",
 			"closed",

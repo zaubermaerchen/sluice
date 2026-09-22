@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"bytes"
 	"io"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -28,7 +27,7 @@ func TestRunEventsFDEmitsSignalTransitions(t *testing.T) {
 	go func() {
 		done <- runWithIO(input, &stdout, diagnostics, []string{
 			"--mode", "discard",
-			"--events-fd", strconv.Itoa(events.fd),
+			"--events-fd", formatEventFD(events.fd),
 			"--open", "signal:USR1",
 			"--close", "signal:USR1",
 			"closed",

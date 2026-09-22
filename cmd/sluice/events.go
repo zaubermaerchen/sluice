@@ -27,7 +27,7 @@ type eventEmitter struct {
 	warnOnce sync.Once
 }
 
-func newEventEmitter(fd int, diagnostics io.Writer) *eventEmitter {
+func newEventEmitter(fd uintptr, diagnostics io.Writer) *eventEmitter {
 	emitter, err := newEventEmitterChecked(fd, diagnostics, time.Now)
 	if err != nil {
 		reportEventFailure(diagnostics, err)
@@ -36,7 +36,7 @@ func newEventEmitter(fd int, diagnostics io.Writer) *eventEmitter {
 	return emitter
 }
 
-func newEventEmitterWithClock(fd int, diagnostics io.Writer, now func() time.Time) *eventEmitter {
+func newEventEmitterWithClock(fd uintptr, diagnostics io.Writer, now func() time.Time) *eventEmitter {
 	emitter, err := newEventEmitterChecked(fd, diagnostics, now)
 	if err != nil {
 		reportEventFailure(diagnostics, err)
@@ -45,7 +45,7 @@ func newEventEmitterWithClock(fd int, diagnostics io.Writer, now func() time.Tim
 	return emitter
 }
 
-func newEventEmitterChecked(fd int, diagnostics io.Writer, now func() time.Time) (*eventEmitter, error) {
+func newEventEmitterChecked(fd uintptr, diagnostics io.Writer, now func() time.Time) (*eventEmitter, error) {
 	if diagnostics == nil {
 		diagnostics = io.Discard
 	}
