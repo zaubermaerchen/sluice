@@ -16,6 +16,10 @@ import (
 // Go's int and uintptr are wider.
 const maxUnixEventFD = 1<<31 - 1
 
+func eventFDPlatform() (bool, []string, string) {
+	return true, []string{"FIFO", "socket"}, "O_NONBLOCK"
+}
+
 func unixEventFD(fd uintptr) (int, error) {
 	if fd > maxUnixEventFD {
 		return 0, errors.New("event file descriptor exceeds the Unix 32-bit range")

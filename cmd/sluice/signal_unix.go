@@ -14,6 +14,8 @@ import (
 
 var ignoredSignals sync.Once
 
+const signalEventsSupported = true
+
 func validateEventPlatform(e event) error {
 	if e.kind == eventSignal {
 		ignoredSignals.Do(func() {

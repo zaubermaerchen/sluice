@@ -6,6 +6,8 @@ package main
 
 import "fmt"
 
+const signalEventsSupported = false
+
 func validateEventPlatform(e event) error {
 	if e.kind == eventSignal {
 		return fmt.Errorf("signal events are not supported on windows")
