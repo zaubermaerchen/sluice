@@ -557,7 +557,7 @@ var _ io.Writer = errorWriter{}
 
 func TestRun_Help(t *testing.T) {
 	wantContent := []string{
-		"  sluice [--mode block|discard] --open EVENT --close EVENT open|closed",
+		"  sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed",
 		"open|closed is the initial stream state",
 		"signal event forms and examples are POSIX-only",
 		"signal:USR1 / signal:SIGUSR1",

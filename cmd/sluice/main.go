@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,10 +44,12 @@ const (
 )
 
 type config struct {
-	mode    streamMode
-	open    event
-	close   event
-	initial streamState
+	mode        streamMode
+	open        event
+	close       event
+	initial     streamState
+	eventsFD    int
+	eventsFDSet bool
 }
 
 type singleValue struct {
@@ -88,12 +91,14 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	var modeValue = singleValue{value: "block"}
 	var openValue singleValue
 	var closeValue singleValue
+	var eventsFDValue singleValue
 	fs.Var(&modeValue, "mode", "stream mode (block|discard)")
 	fs.Var(&openValue, "open", "event that opens the sluice")
 	fs.Var(&closeValue, "close", "event that closes the sluice")
+	fs.Var(&eventsFDValue, "events-fd", "file descriptor for JSONL lifecycle events")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
-		fmt.Fprintln(fs.Output(), "  sluice [--mode block|discard] --open EVENT --close EVENT open|closed")
+		fmt.Fprintln(fs.Output(), "  sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed")
 		fmt.Fprintln(fs.Output(), "")
 		fmt.Fprintln(fs.Output(), "open|closed is the initial stream state: open forwards stdin; closed starts closed.")
 		fmt.Fprintln(fs.Output(), "Events:")
@@ -104,6 +109,8 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(fs.Output(), "Modes:")
 		fmt.Fprintln(fs.Output(), "  block: do not read stdin while closed; propagates backpressure upstream")
 		fmt.Fprintln(fs.Output(), "  discard: read and discard stdin while closed")
+		fmt.Fprintln(fs.Output(), "Lifecycle events:")
+		fmt.Fprintln(fs.Output(), "  --events-fd N writes committed stream transitions as JSONL; N must be at least 3")
 		fmt.Fprintln(fs.Output(), "Examples:")
 		fmt.Fprintln(fs.Output(), "  sluice --open signal:USR1 --close signal:USR2 closed")
 		fmt.Fprintln(fs.Output(), "  sluice --open signal:USR1 --close signal:USR1 closed")
@@ -134,17 +141,28 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 		return 0
 	}
 
-	cfg, err := parseConfig(modeValue, openValue, closeValue, fs.Args())
+	cfg, err := parseConfigWithEventsFD(modeValue, openValue, closeValue, eventsFDValue, fs.Args())
 	if err != nil {
 		fmt.Fprintf(stderr, "sluice: %v\n", err)
 		fs.Usage()
 		return 2
+	}
+	if cfg.eventsFDSet {
+		if err := validateEventDescriptor(cfg.eventsFD); err != nil {
+			fmt.Fprintf(stderr, "sluice: invalid event file descriptor %d: %v\n", cfg.eventsFD, err)
+			fs.Usage()
+			return 2
+		}
 	}
 
 	return runStateMachine(stdin, stdout, stderr, cfg)
 }
 
 func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (config, error) {
+	return parseConfigWithEventsFD(modeValue, openValue, closeValue, singleValue{}, args)
+}
+
+func parseConfigWithEventsFD(modeValue, openValue, closeValue, eventsFDValue singleValue, args []string) (config, error) {
 	if !openValue.set {
 		return config{}, errors.New("--open is required")
 	}
@@ -153,6 +171,14 @@ func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (c
 	}
 
 	var cfg config
+	if eventsFDValue.set {
+		fd, err := parseEventsFD(eventsFDValue.value)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.eventsFD = fd
+		cfg.eventsFDSet = true
+	}
 	switch modeValue.value {
 	case "block":
 		cfg.mode = modeBlock
@@ -192,6 +218,17 @@ func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (c
 		return config{}, fmt.Errorf("invalid initial state %q: want open or closed", args[0])
 	}
 	return cfg, nil
+}
+
+func parseEventsFD(value string) (int, error) {
+	fd, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid file descriptor for --events-fd: %w", err)
+	}
+	if fd < 3 {
+		return 0, errors.New("--events-fd must be at least 3")
+	}
+	return fd, nil
 }
 
 func parseEvent(value string) (event, error) {
@@ -358,8 +395,21 @@ func runStateMachine(stdin io.Reader, stdout, stderr io.Writer, cfg config) int 
 }
 
 func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg config, arm func(event) (armedEvent, error)) int {
+	if cfg.eventsFDSet {
+		stderr = newDiagnosticWriter(stderr)
+	}
 	stream := newStream(stdin, stdout, cfg.mode)
 	state := cfg.initial
+	var emitter *eventEmitter
+	if cfg.eventsFDSet {
+		var emitterErr error
+		emitter, emitterErr = newEventEmitterChecked(cfg.eventsFD, stderr, time.Now)
+		if emitterErr != nil {
+			fmt.Fprintf(stderr, "sluice: %v\n", emitterErr)
+			return 2
+		}
+		defer emitter.close()
+	}
 
 	armed, err := arm(eventForState(cfg, state))
 	if err != nil {
@@ -390,6 +440,9 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 	}
 
 	stream.setState(state)
+	if state != cfg.initial {
+		emitter.emit(streamStateEvent(state))
+	}
 	copyResult := make(chan copyOutcome, 1)
 	go func() {
 		_, err := io.Copy(stream.writer, stream.reader)
@@ -426,11 +479,19 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 			armed = next
 			state = nextState
 			stream.setState(state)
+			emitter.emit(streamStateEvent(state))
 			if eofPending && (state == stateOpen || cfg.mode == modeDiscard) {
 				return 0
 			}
 		}
 	}
+}
+
+func streamStateEvent(state streamState) string {
+	if state == stateOpen {
+		return "stream-open"
+	}
+	return "stream-closed"
 }
 
 func eventForState(cfg config, state streamState) event {
