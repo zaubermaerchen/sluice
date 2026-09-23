@@ -103,6 +103,39 @@ func TestRunEventsFDRejectsBlockingWindowsPipeBeforeReading(t *testing.T) {
 	}
 }
 
+func TestRunEventsFDRejectsReadOnlyWindowsPipeBeforeReading(t *testing.T) {
+	name, err := windows.UTF16PtrFromString(`\\.\pipe\sluice-test-` + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := windows.CreateNamedPipe(name, windows.PIPE_ACCESS_INBOUND, windows.PIPE_TYPE_BYTE|windows.PIPE_NOWAIT, 1, 4096, 4096, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(reader)
+	if mode := windowsEventPipeMode(t, reader); mode&windows.PIPE_NOWAIT == 0 {
+		t.Fatalf("read-only pipe mode = %#x, want PIPE_NOWAIT", mode)
+	}
+
+	stdin := &trackingReader{}
+	var stdout, stderr bytes.Buffer
+	status := runWithIO(stdin, &stdout, &stderr, []string{
+		"--events-fd", formatEventFD(uintptr(reader)),
+		"--open", "duration:1h",
+		"--close", "duration:1h",
+		"open",
+	})
+	if status != 2 {
+		t.Fatalf("run status = %d, want usage error; stderr = %q", status, stderr.String())
+	}
+	if stdin.read || stdout.Len() != 0 {
+		t.Fatal("startup FD validation processed stdin")
+	}
+	if !strings.Contains(stderr.String(), "writable") {
+		t.Fatalf("stderr = %q, want writable-pipe validation diagnostic", stderr.String())
+	}
+}
+
 func TestRunEventsFDDoesNotWaitForFullWindowsConsumer(t *testing.T) {
 	events := newTestEventSink(t)
 	handle := windows.Handle(events.fd)
