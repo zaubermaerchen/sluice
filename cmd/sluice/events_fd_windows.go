@@ -32,7 +32,11 @@ func validateEventDescriptor(fd uintptr) error {
 	if mode&windows.PIPE_NOWAIT == 0 {
 		return errors.New("event pipe must already use PIPE_NOWAIT mode")
 	}
-	return nil
+	var writable windows.Handle
+	if err := windows.DuplicateHandle(windows.CurrentProcess(), handle, windows.CurrentProcess(), &writable, windows.FILE_WRITE_DATA, false, 0); err != nil {
+		return fmt.Errorf("event pipe must be writable: %w", err)
+	}
+	return windows.CloseHandle(writable)
 }
 
 func duplicateEventFile(fd uintptr) (*os.File, error) {
