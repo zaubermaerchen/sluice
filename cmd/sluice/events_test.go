@@ -14,6 +14,15 @@ import (
 	"time"
 )
 
+func newEventEmitter(fd uintptr, diagnostics io.Writer) *eventEmitter {
+	emitter, err := newEventEmitterChecked(fd, diagnostics, time.Now)
+	if err != nil {
+		reportEventFailure(diagnostics, err)
+		return nil
+	}
+	return emitter
+}
+
 type testLifecycleEvent struct {
 	Event     string `json:"event"`
 	Timestamp string `json:"timestamp"`

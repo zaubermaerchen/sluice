@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (config, error) {
+	return parseConfigWithEventsFD(modeValue, openValue, closeValue, singleValue{}, args)
+}
+
 func TestRun_MissingNormalOperationArguments(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
