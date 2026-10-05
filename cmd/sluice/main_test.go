@@ -827,6 +827,129 @@ func TestRun_SameSignalRepeatedlyTogglesState(t *testing.T) {
 	}
 }
 
+func TestRun_BlockRetainsInFlightChunkUntilReopened(t *testing.T) {
+	for _, dataWithEOF := range []bool{false, true} {
+		name := "separate EOF"
+		if dataWithEOF {
+			name = "data with EOF"
+		}
+		t.Run(name, func(t *testing.T) {
+			readStarted := make(chan struct{})
+			releaseRead := make(chan struct{})
+			readReturned := make(chan struct{})
+			secondRead := make(chan struct{})
+			reads := 0
+			input := &blockProbeReader{read: func(p []byte) (int, error) {
+				reads++
+				if reads > 1 {
+					close(secondRead)
+					return 0, io.EOF
+				}
+				close(readStarted)
+				<-releaseRead
+				n := copy(p, "retained chunk\n")
+				close(readReturned)
+				if dataWithEOF {
+					return n, io.EOF
+				}
+				return n, nil
+			}}
+			closeEvent := make(chan struct{}, 1)
+			openEvent := make(chan struct{}, 1)
+			closedArm := make(chan struct{})
+			reopenArm := make(chan struct{})
+			allowReopen := make(chan struct{})
+			armCalls := 0
+			arm := func(event) (armedEvent, error) {
+				armCalls++
+				switch armCalls {
+				case 1:
+					return armedEvent{ch: closeEvent, stop: func() {}}, nil
+				case 2:
+					close(closedArm)
+					return armedEvent{ch: openEvent, stop: func() {}}, nil
+				default:
+					close(reopenArm)
+					<-allowReopen
+					return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
+				}
+			}
+			stdout := newLockedBuffer()
+			var stderr bytes.Buffer
+			done := make(chan int, 1)
+			go func() {
+				done <- runStateMachineWithArmer(input, stdout, &stderr, config{
+					mode: modeBlock, initial: stateOpen,
+					open: event{kind: eventDuration}, close: event{kind: eventDuration},
+				}, arm)
+			}()
+			releaseInput := closeOnce(releaseRead)
+			reopen := closeOnce(allowReopen)
+			finished := false
+			defer func() {
+				releaseInput()
+				reopen()
+				select {
+				case openEvent <- struct{}{}:
+				default:
+				}
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("run did not finish during cleanup")
+					}
+				}
+			}()
+			wait := func(ch <-chan struct{}, what string) {
+				t.Helper()
+				select {
+				case <-ch:
+				case <-time.After(time.Second):
+					t.Fatalf("timed out waiting for %s", what)
+				}
+			}
+			wait(readStarted, "in-flight OPEN read")
+			closeEvent <- struct{}{}
+			wait(closedArm, "CLOSED event arming")
+			openEvent <- struct{}{}
+			// Reopening is armed only after CLOSED is published. Hold that
+			// arm so the source returns its chunk while the writer is CLOSED.
+			wait(reopenArm, "reopening event arming")
+			releaseInput()
+			wait(readReturned, "in-flight chunk")
+			select {
+			case <-secondRead:
+				t.Fatal("started another source read while CLOSED")
+			case <-time.After(50 * time.Millisecond):
+			}
+			if got := stdout.String(); got != "" {
+				t.Fatalf("forwarded chunk while CLOSED: %q", got)
+			}
+			reopen()
+			select {
+			case code := <-done:
+				finished = true
+				if code != 0 {
+					t.Fatalf("exit code = %d; stderr=%q", code, stderr.String())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("did not finish after reopening and EOF")
+			}
+			if got := stdout.String(); got != "retained chunk\n" {
+				t.Fatalf("forwarded output = %q, want retained chunk exactly once", got)
+			}
+			wantReads := 2
+			if dataWithEOF {
+				wantReads = 1
+			}
+			if reads != wantReads {
+				t.Fatalf("source reads = %d, want %d", reads, wantReads)
+			}
+		})
+	}
+}
+
 func TestRun_EOFObservedDuringOpenReadCompletesAfterCloseTransition(t *testing.T) {
 	input := &eofGateReader{started: make(chan struct{}), release: make(chan struct{})}
 	releaseInput := closeOnce(input.release)
