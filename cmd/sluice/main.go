@@ -210,10 +210,6 @@ func longOptionDiagnostic(message string) string {
 	return message
 }
 
-func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (config, error) {
-	return parseConfigWithEventsFD(modeValue, openValue, closeValue, singleValue{}, args)
-}
-
 func parseConfigWithEventsFD(modeValue, openValue, closeValue, eventsFDValue singleValue, args []string) (config, error) {
 	if !openValue.set {
 		return config{}, errors.New("--open is required")
