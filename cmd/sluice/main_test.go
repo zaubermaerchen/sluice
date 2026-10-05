@@ -3,6 +3,7 @@ package main
 // This file verifies CLI validation, event handling, and stream state behavior.
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"io"
@@ -1061,6 +1062,7 @@ func TestStream_InFlightEOFWhileClosed(t *testing.T) {
 }
 
 func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
+	events := newTestEventSink(t)
 	readStarted := make(chan struct{})
 	releaseRead := make(chan struct{})
 	readReturned := make(chan struct{})
@@ -1072,8 +1074,6 @@ func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
 	}}
 	closeEvent := make(chan struct{}, 1)
 	openEvent := make(chan struct{}, 1)
-	reopenArm := make(chan struct{})
-	allowReopen := make(chan struct{})
 	armCalls := 0
 	arm := func(event) (armedEvent, error) {
 		armCalls++
@@ -1083,8 +1083,6 @@ func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
 		case 2:
 			return armedEvent{ch: openEvent, stop: func() {}}, nil
 		default:
-			close(reopenArm)
-			<-allowReopen
 			return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
 		}
 	}
@@ -1094,18 +1092,18 @@ func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
 		done <- runStateMachineWithArmer(input, &stdout, &stderr, config{
 			mode: modeBlock, initial: stateOpen,
 			open: event{kind: eventDuration}, close: event{kind: eventDuration},
+			eventsFD: events.fd, eventsFDSet: true,
 		}, arm)
 	}()
 	releaseInput := closeOnce(releaseRead)
-	reopen := closeOnce(allowReopen)
+	var reopenOnce sync.Once
+	reopen := func() {
+		reopenOnce.Do(func() { openEvent <- struct{}{} })
+	}
 	finished := false
 	defer func() {
 		releaseInput()
 		reopen()
-		select {
-		case openEvent <- struct{}{}:
-		default:
-		}
 		if !finished {
 			select {
 			case <-done:
@@ -1124,12 +1122,19 @@ func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
 	}
 	wait(readStarted, "in-flight OPEN read")
 	closeEvent <- struct{}{}
-	openEvent <- struct{}{}
-	// Reopening is armed after CLOSED is published. Hold the arm until
-	// the in-flight source returns EOF, then let OPEN release the result.
-	wait(reopenArm, "reopening event arming")
+	// Observe committed CLOSED without blocking the state machine in its
+	// armer, so an early EOF completion can reach done before reopening.
+	if got := readTestLifecycleEvent(t, bufio.NewReader(events.reader)).Event; got != "stream-closed" {
+		t.Fatalf("transition event = %q, want stream-closed", got)
+	}
 	releaseInput()
 	wait(readReturned, "source EOF")
+	select {
+	case code := <-done:
+		finished = true
+		t.Fatalf("run finished while CLOSED before reopening: exit code = %d", code)
+	case <-time.After(50 * time.Millisecond):
+	}
 	reopen()
 	select {
 	case code := <-done:
