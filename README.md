@@ -88,6 +88,7 @@ The supported event forms are:
 - `duration:DURATION`, where `DURATION` uses Go duration syntax such as
   `250ms`, `1s`, or `1m30s`.
 
+All positive Go durations are accepted, with no fixed minimum duration.
 Negative durations are rejected. Signal events are POSIX-only; on Windows and
 other platforms without these signals, use duration events.
 
@@ -95,6 +96,12 @@ A duration begins when its transition event is armed for the corresponding
 state. The initial state's duration starts at process startup; the other
 duration starts when its state is entered, and each duration restarts whenever
 its state is entered again.
+
+Durations are scheduling intervals rather than guarantees of precise
+state-transition timing. When both conditions repeatedly become ready
+immediately, very short durations can cause rapid state transitions and high
+CPU usage. If the opposite condition waits, a short duration alone does not
+cause continuous transitions.
 
 Use `-h` or `--help` for the command summary. `--version` prints the version
 and must be used by itself, without normal-operation arguments.
@@ -129,6 +136,10 @@ event, `sluice` warns once on stderr, disables further event output, and
 continues its normal stream behavior. A failed nonblocking socket write may
 leave a partial final JSON line; consumers should discard an incomplete line
 after an event-stream failure.
+
+At high event rates, the consumer may not keep up; if the descriptor cannot
+accept an event, the existing write-failure behavior disables further event
+output as described above.
 
 For example, a Unix caller can create a nonblocking event pipe and pass its
 write end to `sluice`:
