@@ -3,6 +3,7 @@ package main
 // This file verifies CLI validation, event handling, and stream state behavior.
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"io"
@@ -950,6 +951,205 @@ func TestRun_BlockRetainsInFlightChunkUntilReopened(t *testing.T) {
 	}
 }
 
+func TestStream_InFlightEOFWhileClosed(t *testing.T) {
+	for _, mode := range []streamMode{modeBlock, modeDiscard} {
+		name := "block"
+		if mode == modeDiscard {
+			name = "discard"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, dataWithEOF := range []bool{false, true} {
+				name := "EOF only"
+				if dataWithEOF {
+					name = "data with EOF"
+				}
+				t.Run(name, func(t *testing.T) {
+					readStarted := make(chan struct{})
+					releaseRead := make(chan struct{})
+					readReturned := make(chan struct{})
+					reads := 0
+					input := &blockProbeReader{read: func(p []byte) (int, error) {
+						reads++
+						close(readStarted)
+						<-releaseRead
+						close(readReturned)
+						if dataWithEOF {
+							return copy(p, "retained EOF chunk"), io.EOF
+						}
+						return 0, io.EOF
+					}}
+					stdout := newLockedBuffer()
+					stream := newStream(input, stdout, mode)
+					stream.setState(stateOpen)
+					done := make(chan error, 1)
+					go func() {
+						_, err := io.Copy(stream.writer, stream.reader)
+						done <- err
+					}()
+					release := closeOnce(releaseRead)
+					finished := false
+					defer func() {
+						release()
+						stream.setState(stateOpen)
+						if !finished {
+							select {
+							case <-done:
+							case <-time.After(time.Second):
+								t.Error("copy did not finish during cleanup")
+							}
+						}
+					}()
+					select {
+					case <-readStarted:
+					case <-time.After(time.Second):
+						t.Fatal("OPEN read did not start")
+					}
+					// Exercise repeated transitions before letting the in-flight
+					// read return; the final committed state is CLOSED.
+					for i := 0; i < 3; i++ {
+						stream.setState(stateClosed)
+						stream.setState(stateOpen)
+					}
+					stream.setState(stateClosed)
+					release()
+					select {
+					case <-readReturned:
+					case <-time.After(time.Second):
+						t.Fatal("source did not return EOF")
+					}
+					if mode == modeBlock {
+						select {
+						case err := <-done:
+							finished = true
+							t.Fatalf("copy finished while CLOSED: %v", err)
+						case <-time.After(50 * time.Millisecond):
+						}
+						if got := stdout.String(); got != "" {
+							t.Fatalf("forwarded bytes while CLOSED: %q", got)
+						}
+						// Reopen and close repeatedly while EOF is pending. Once an
+						// OPEN releases EOF it remains observable, even if CLOSED
+						// follows before io.Copy reports completion.
+						for i := 0; i < 3; i++ {
+							stream.setState(stateOpen)
+							stream.setState(stateClosed)
+						}
+						stream.setState(stateOpen)
+					}
+					select {
+					case err := <-done:
+						finished = true
+						if err != nil {
+							t.Fatalf("copy returned error: %v", err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("copy did not finish after EOF became observable")
+					}
+					want := ""
+					if mode == modeBlock && dataWithEOF {
+						want = "retained EOF chunk"
+					}
+					if got := stdout.String(); got != want {
+						t.Fatalf("output = %q, want %q", got, want)
+					}
+					if reads != 1 {
+						t.Fatalf("source reads = %d, want 1", reads)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
+	events := newTestEventSink(t)
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	readReturned := make(chan struct{})
+	input := &blockProbeReader{read: func([]byte) (int, error) {
+		close(readStarted)
+		<-releaseRead
+		close(readReturned)
+		return 0, io.EOF
+	}}
+	closeEvent := make(chan struct{}, 1)
+	openEvent := make(chan struct{}, 1)
+	armCalls := 0
+	arm := func(event) (armedEvent, error) {
+		armCalls++
+		switch armCalls {
+		case 1:
+			return armedEvent{ch: closeEvent, stop: func() {}}, nil
+		case 2:
+			return armedEvent{ch: openEvent, stop: func() {}}, nil
+		default:
+			return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runStateMachineWithArmer(input, &stdout, &stderr, config{
+			mode: modeBlock, initial: stateOpen,
+			open: event{kind: eventDuration}, close: event{kind: eventDuration},
+			eventsFD: events.fd, eventsFDSet: true,
+		}, arm)
+	}()
+	releaseInput := closeOnce(releaseRead)
+	var reopenOnce sync.Once
+	reopen := func() {
+		reopenOnce.Do(func() { openEvent <- struct{}{} })
+	}
+	finished := false
+	defer func() {
+		releaseInput()
+		reopen()
+		if !finished {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("run did not finish during cleanup")
+			}
+		}
+	}()
+	wait := func(ch <-chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+	wait(readStarted, "in-flight OPEN read")
+	closeEvent <- struct{}{}
+	// Observe committed CLOSED without blocking the state machine in its
+	// armer, so an early EOF completion can reach done before reopening.
+	if got := readTestLifecycleEvent(t, bufio.NewReader(events.reader)).Event; got != "stream-closed" {
+		t.Fatalf("transition event = %q, want stream-closed", got)
+	}
+	releaseInput()
+	wait(readReturned, "source EOF")
+	select {
+	case code := <-done:
+		finished = true
+		t.Fatalf("run finished while CLOSED before reopening: exit code = %d", code)
+	case <-time.After(50 * time.Millisecond):
+	}
+	reopen()
+	select {
+	case code := <-done:
+		finished = true
+		if code != 0 {
+			t.Fatalf("exit code = %d; stderr=%q", code, stderr.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not finish after reopening and EOF")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("EOF-only input wrote %q", stdout.String())
+	}
+}
+
 func TestRun_EOFObservedDuringOpenReadCompletesAfterCloseTransition(t *testing.T) {
 	input := &eofGateReader{started: make(chan struct{}), release: make(chan struct{})}
 	releaseInput := closeOnce(input.release)
@@ -1080,6 +1280,8 @@ func TestRun_ArmsNextEventBeforePublishingState(t *testing.T) {
 			close(nextArmEntered)
 			<-allowNextArm
 			return armedEvent{ch: nextEvent, stop: func() {}}, nil
+		case 4:
+			return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
 		default:
 			return armedEvent{}, errors.New("unexpected extra arm")
 		}
@@ -1130,6 +1332,9 @@ func TestRun_ArmsNextEventBeforePublishingState(t *testing.T) {
 	}
 	allowArm()
 	closeSecondRead()
+	// The second read proves OPEN remained published during arming. Its
+	// EOF may return after CLOSED is published, so reopen to release it.
+	nextEvent <- struct{}{}
 
 	select {
 	case exitCode := <-done:
@@ -1138,7 +1343,7 @@ func TestRun_ArmsNextEventBeforePublishingState(t *testing.T) {
 			t.Fatalf("expected successful EOF exit, got %d; stderr=%q", exitCode, stderr.String())
 		}
 	case <-time.After(time.Second):
-		t.Fatal("run did not finish after the source reached EOF")
+		t.Fatal("run did not finish after reopening and source EOF")
 	}
 }
 

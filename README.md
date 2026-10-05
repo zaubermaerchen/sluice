@@ -275,9 +275,9 @@ printf '%s\n' 'discarded' |
 - EOF while OPEN exits successfully after forwarded data has been written.
 - EOF while CLOSED in `discard` mode exits successfully after the input is
   drained.
-- CLOSED `block` mode does not read stdin while CLOSED, so EOF from the normal
-  CLOSED/block path is deferred until OPEN. A read already in flight can
-  observe EOF according to the transition race.
+- CLOSED `block` mode does not start new stdin reads. If a read already in
+  flight returns EOF while CLOSED, the EOF and any final bytes are held until
+  OPEN. EOF returned while OPEN does not wait for a later OPEN transition.
 
 In `block` mode, a read already in flight when the stream closes may complete.
 Its chunk is held until OPEN, then forwarded exactly once before another read;
