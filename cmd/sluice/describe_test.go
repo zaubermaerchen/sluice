@@ -7,9 +7,52 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestRun_DescribeDurationAndEventRateCautionsMatchREADME(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readmeText := strings.Join(strings.Fields(string(readme)), " ")
+	var output, diagnostics bytes.Buffer
+	if got := runWithIO(&trackingReader{}, &output, &diagnostics, []string{"--describe"}); got != 0 {
+		t.Fatalf("runWithIO() exit code = %d, want 0; diagnostics = %q", got, diagnostics.String())
+	}
+	var document description
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, contract := range []struct {
+		name    string
+		text    string
+		phrases []string
+	}{
+		{"duration_arming", document.StateMachine.DurationArming, []string{
+			"All positive Go durations are accepted, with no fixed minimum duration",
+			"scheduling intervals rather than guarantees of precise state-transition timing",
+			"When both conditions repeatedly become ready immediately",
+			"very short durations can cause rapid state transitions and high CPU usage",
+			"If the opposite condition waits, a short duration alone does not cause continuous transitions",
+		}},
+		{"event_fd", document.StreamSemantics.EventFD.Description, []string{
+			"At high event rates, the consumer may not keep up",
+			"if the descriptor cannot accept an event, the existing write-failure behavior disables further event output",
+		}},
+	} {
+		for _, phrase := range contract.phrases {
+			if (contract.name != "event_fd" || document.StreamSemantics.EventFD.Supported) && !strings.Contains(contract.text, phrase) {
+				t.Errorf("%s = %q, missing %q", contract.name, contract.text, phrase)
+			}
+			if !strings.Contains(readmeText, phrase) {
+				t.Errorf("README missing %s caution %q", contract.name, phrase)
+			}
+		}
+	}
+}
 
 func TestRun_DescribeEmitsFixedJSONWithoutRuntimeProcessing(t *testing.T) {
 	var firstOutput, firstDiagnostics bytes.Buffer
