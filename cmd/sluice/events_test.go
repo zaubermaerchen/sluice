@@ -644,6 +644,7 @@ func TestRunEventsFDStalledWarningDoesNotDelayExit(t *testing.T) {
 				}
 				return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
 			}
+			started := time.Now()
 			go func() {
 				defer close(exited)
 				done <- runStateMachineWithArmer(releaseErrorReader{
@@ -658,6 +659,9 @@ func TestRunEventsFDStalledWarningDoesNotDelayExit(t *testing.T) {
 			case status := <-done:
 				if status != test.status {
 					t.Fatalf("run status = %d, want %d", status, test.status)
+				}
+				if test.status == 1 && time.Since(started) < 100*time.Millisecond {
+					t.Fatal("primary exit skipped the warning contention grace period")
 				}
 			case <-time.After(time.Second):
 				t.Fatal("run waited for stalled event warning")
@@ -721,5 +725,65 @@ func TestRunEventsFDPrimaryDiagnosticRemainsSynchronous(t *testing.T) {
 	}
 	if text := diagnostics.String(); text != "sluice: I/O error: copy failed\n" {
 		t.Fatalf("diagnostics = %q, want one synchronous primary diagnostic", text)
+	}
+}
+
+func TestPrimaryDiagnosticSurvivesBriefWarningContention(t *testing.T) {
+	sink := newOverlapDiagnosticWriter()
+	diagnostics := newDiagnosticWriter(sink)
+	reportEventFailure(diagnostics, errors.New("consumer closed"))
+	select {
+	case <-sink.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("warning did not start")
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		sink.release()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("primary reporter did not finish")
+		}
+		select {
+		case <-sink.finished:
+		case <-time.After(time.Second):
+			t.Error("warning did not finish")
+		}
+	})
+	go func() {
+		reportPrimaryFailure(diagnostics, "sluice: I/O error: copy failed\n")
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("primary diagnostic was discarded during a brief warning")
+	case <-time.After(10 * time.Millisecond):
+	}
+	sink.release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("primary diagnostic did not follow completed warning")
+	}
+	if got, want := sink.String(), "sluice: events disabled: consumer closed\nsluice: I/O error: copy failed\n"; got != want {
+		t.Fatalf("diagnostics = %q, want %q", got, want)
+	}
+	select {
+	case <-sink.overlap:
+		t.Fatal("warning and primary diagnostic overlapped")
+	default:
+	}
+}
+
+func TestWarningCompletionWinsExpiredGrace(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	for i := 0; i < 1000; i++ {
+		expired := make(chan time.Time, 1)
+		expired <- time.Time{}
+		if !waitEventWarning(done, expired) {
+			t.Fatal("completed warning lost to an already-ready grace timer")
+		}
 	}
 }
