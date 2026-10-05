@@ -489,3 +489,10 @@ func (writer *overlapDiagnosticWriter) String() string {
 	defer writer.mu.Unlock()
 	return writer.data.String()
 }
+
+func setTestEventNonblocking(t *testing.T, events *testEventSink, enabled bool) {
+	t.Helper()
+	if err := unix.SetNonblock(int(events.fd), enabled); err != nil {
+		t.Fatal(err)
+	}
+}

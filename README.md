@@ -140,6 +140,10 @@ caller. On Unix, it must be a writable FIFO or socket that is already in
 before reading stdin when the descriptor is unsuitable. Keep the mode enabled
 while `sluice` is running because the duplicate shares the descriptor's open
 file description; `sluice` does not change the caller's descriptor flags.
+The destination is also checked before each event write. If its mode becomes
+unsuitable or its consumer disconnects, event output is disabled with one
+warning and normal stream processing continues. The checks reduce the risk of
+blocking the stream, but cannot prevent a mode change racing with a write.
 
 Event writes are immediate and nonblocking. If the descriptor cannot accept an
 event, `sluice` warns once on stderr, disables further event output, and

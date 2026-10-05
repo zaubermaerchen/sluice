@@ -277,6 +277,154 @@ func TestRunEventsFDWriteSetupFailureRejectsBeforeReading(t *testing.T) {
 	}
 }
 
+func TestRunEventsFDDisablesAfterModeChange(t *testing.T) {
+	events := newTestEventSink(t)
+	assertRunContinuesAfterEventFailure(t, events,
+		func() { setTestEventNonblocking(t, events, false) },
+		func() { setTestEventNonblocking(t, events, true) })
+	assertTestLifecycleEvents(t, readTestLifecycleEvents(t, events), nil)
+}
+
+func TestRunEventsFDDisablesAfterConsumerDisconnect(t *testing.T) {
+	events := newTestEventSink(t)
+	assertRunContinuesAfterEventFailure(t, events,
+		func() {
+			if err := events.reader.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}, func() {})
+}
+
+func TestEventEmitterDisablesAfterConsumerDisconnect(t *testing.T) {
+	events := newTestEventSink(t)
+	emitter, err := newEventEmitterChecked(events.fd, io.Discard, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(emitter.close)
+	if err := events.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	emitter.emit("stream-open")
+	if !emitter.disabled {
+		t.Fatal("consumer disconnect did not disable event output")
+	}
+	emitter.emit("stream-closed")
+	if !emitter.disabled {
+		t.Fatal("later emit re-enabled event output after consumer disconnect")
+	}
+}
+
+func assertRunContinuesAfterEventFailure(t *testing.T, events *testEventSink, fail, recoverDestination func()) {
+	t.Helper()
+	input, inputWriter := io.Pipe()
+	t.Cleanup(func() { _ = input.Close(); _ = inputWriter.Close() })
+	ready := make(chan struct{})
+	close(ready)
+	copyReady := make(chan struct{})
+	startupReady := make(chan struct{})
+	failureReady := make(chan struct{})
+	recoveryReady := make(chan struct{})
+	recovered := make(chan struct{})
+	releaseFailure := closeOnce(failureReady)
+	releaseRecovery := closeOnce(recovered)
+	t.Cleanup(releaseFailure)
+	t.Cleanup(releaseRecovery)
+	armCalls := 0
+	arm := func(event) (armedEvent, error) {
+		armCalls++
+		switch armCalls {
+		case 1:
+			// Startup validation has completed before the first event is armed.
+			close(startupReady)
+			<-failureReady
+		case 3:
+			// The first failed write must disable output even if the sink recovers.
+			close(recoveryReady)
+			<-recovered
+		case 4:
+			close(copyReady)
+			return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
+		}
+		return armedEvent{ch: ready, stop: func() {}}, nil
+	}
+	var output bytes.Buffer
+	diagnostics := &eventFailureDiagnostics{lockedBuffer: newLockedBuffer(), written: make(chan struct{}, 3)}
+	done := make(chan int, 1)
+	go func() {
+		done <- runStateMachineWithArmer(input, &output, diagnostics, config{
+			mode: modeBlock, initial: stateClosed,
+			open: event{kind: eventDuration}, close: event{kind: eventDuration},
+			eventsFD: events.fd, eventsFDSet: true,
+		}, arm)
+	}()
+	for _, step := range []struct {
+		ready   <-chan struct{}
+		change  func()
+		release func()
+	}{
+		{startupReady, fail, releaseFailure},
+		{recoveryReady, recoverDestination, releaseRecovery},
+	} {
+		select {
+		case <-step.ready:
+		case <-time.After(time.Second):
+			t.Fatal("event failure prevented subsequent transitions")
+		}
+		step.change()
+		step.release()
+	}
+	select {
+	case <-copyReady:
+	case <-time.After(time.Second):
+		t.Fatal("event failure prevented subsequent transitions")
+	}
+	inputDone := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(inputWriter, "forwarded after event failure")
+		_ = inputWriter.Close()
+		inputDone <- err
+	}()
+	select {
+	case status := <-done:
+		if status != 0 {
+			t.Fatalf("run status = %d, want 0; stderr = %q", status, diagnostics.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event failure prevented normal stream completion")
+	}
+	select {
+	case err := <-inputDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("normal stream completion did not consume input")
+	}
+	if got := output.String(); got != "forwarded after event failure" {
+		t.Fatalf("stdout = %q, want forwarded input", got)
+	}
+	select {
+	case <-diagnostics.written:
+	case <-time.After(time.Second):
+		t.Fatal("event failure did not warn")
+	}
+	if got := strings.Count(diagnostics.String(), "events disabled:"); got != 1 {
+		t.Fatalf("stderr = %q, want one events warning", diagnostics.String())
+	}
+}
+
+type eventFailureDiagnostics struct {
+	*lockedBuffer
+	written chan struct{}
+}
+
+func (diagnostics *eventFailureDiagnostics) Write(p []byte) (int, error) {
+	n, err := diagnostics.lockedBuffer.Write(p)
+	diagnostics.written <- struct{}{}
+	return n, err
+}
+
 func waitForTestEventWarning(t *testing.T, diagnostics *lockedBuffer) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
