@@ -15,6 +15,8 @@ func validateEventPlatform(e event) error {
 	return nil
 }
 
+func prepareSignalHandling() {}
+
 func armSignal(e event) (armedEvent, error) {
 	return armedEvent{}, validateEventPlatform(e)
 }

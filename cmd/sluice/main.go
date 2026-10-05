@@ -479,6 +479,11 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 		defer emitter.close()
 	}
 
+	if cfg.open.kind == eventSignal || cfg.close.kind == eventSignal {
+		// Defer process-wide signal changes until event output setup has succeeded.
+		prepareSignalHandling()
+	}
+
 	armed, err := arm(eventForState(cfg, state))
 	if err != nil {
 		fmt.Fprintf(stderr, "sluice: cannot arm event: %v\n", err)

@@ -2,7 +2,7 @@
 
 package main
 
-// This file arms the POSIX signals supported by the sluice event syntax.
+// This file prepares and arms the POSIX signals supported by the sluice event syntax.
 
 import (
 	"fmt"
@@ -17,13 +17,14 @@ var ignoredSignals sync.Once
 const signalEventsSupported = true
 
 func validateEventPlatform(e event) error {
-	if e.kind == eventSignal {
-		ignoredSignals.Do(func() {
-			// Signals that are not currently armed must be harmless same-state events.
-			signal.Ignore(syscall.SIGUSR1, syscall.SIGUSR2)
-		})
-	}
 	return nil
+}
+
+func prepareSignalHandling() {
+	ignoredSignals.Do(func() {
+		// Signals that are not currently armed must be harmless same-state events.
+		signal.Ignore(syscall.SIGUSR1, syscall.SIGUSR2)
+	})
 }
 
 func armSignal(e event) (armedEvent, error) {
