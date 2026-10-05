@@ -180,7 +180,7 @@ func newDescription() description {
 			SameEventToggles:          true,
 			DurationArming:            "A duration starts when its corresponding transition event is armed for the current state, and restarts whenever that state is re-entered.",
 			EOFBehavior:               "EOF while OPEN succeeds after forwarded bytes are written; EOF while CLOSED in discard mode succeeds after input is drained; CLOSED block mode does not start new reads; EOF returned by a read already in flight while CLOSED is deferred until OPEN, together with any final bytes. EOF returned while OPEN does not wait for a later OPEN transition. EOF emits no lifecycle event.",
-			InFlightBoundary:          "In block mode, a read already in flight when CLOSED may complete; its chunk is held until OPEN, then forwarded exactly once before another read, and no new read starts while CLOSED. A destination write already in flight may complete after CLOSED, so there is no strict transition-boundary cutoff. In discard mode, boundary bytes may be forwarded or discarded according to the transition race.",
+			InFlightBoundary:          "In block mode, a read already in flight when CLOSED may complete; its chunk is held until OPEN, then forwarded exactly once before another read, and no new read starts while CLOSED. A destination write already in flight may complete after CLOSED, so there is no strict transition-boundary cutoff. In discard mode, boundary bytes may be forwarded or discarded according to the transition race. These CLOSED guarantees apply once the transition is complete. While a transition is still underway, boundary bytes may already be forwarded; EOF already accepted while OPEN may complete without another OPEN.",
 		},
 		SideEffects: []sideEffect{},
 	}

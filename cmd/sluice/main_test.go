@@ -1061,6 +1061,200 @@ func TestStream_InFlightEOFWhileClosed(t *testing.T) {
 	}
 }
 
+// Hold the writer lock to expose the interval between the two gate updates.
+// The reader must already be CLOSED there, so an in-flight EOF cannot escape.
+func TestStream_CloseGatesReaderBeforeWriter(t *testing.T) {
+	for _, result := range []string{"EOF only", "data with EOF", "data then EOF"} {
+		t.Run(result, func(t *testing.T) {
+			readStarted := make(chan struct{})
+			releaseRead := make(chan struct{})
+			readReturned := make(chan struct{})
+			reads := 0
+			source := &blockProbeReader{read: func(p []byte) (int, error) {
+				reads++
+				if reads > 1 {
+					return 0, io.EOF
+				}
+				close(readStarted)
+				<-releaseRead
+				defer close(readReturned)
+				if result == "EOF only" {
+					return 0, io.EOF
+				}
+				n := copy(p, "retained transition chunk")
+				if result == "data with EOF" {
+					return n, io.EOF
+				}
+				return n, nil
+			}}
+			stdout := newLockedBuffer()
+			stream := newStream(source, stdout, modeBlock)
+			stream.setState(stateOpen)
+			done := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(stream.writer, stream.reader)
+				done <- err
+			}()
+			release := closeOnce(releaseRead)
+			finished := false
+			defer func() {
+				release()
+				stream.setState(stateOpen)
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(time.Second):
+						t.Error("copy did not finish during cleanup")
+					}
+				}
+			}()
+			select {
+			case <-readStarted:
+			case <-time.After(time.Second):
+				t.Fatal("OPEN read did not start")
+			}
+			stream.reader.mu.Lock()
+			readerChanged := stream.reader.changed
+			stream.reader.mu.Unlock()
+			stream.writer.mu.Lock()
+			closeDone := make(chan struct{})
+			go func() {
+				stream.setState(stateClosed)
+				close(closeDone)
+			}()
+			writerLocked := true
+			defer func() {
+				if writerLocked {
+					stream.writer.mu.Unlock()
+				}
+				select {
+				case <-closeDone:
+				case <-time.After(time.Second):
+					t.Error("CLOSE did not finish during cleanup")
+				}
+			}()
+			select {
+			case <-readerChanged:
+			case <-time.After(time.Second):
+				t.Fatal("CLOSE did not gate the reader before updating the blocked writer")
+			}
+			stream.reader.mu.Lock()
+			enabled := stream.reader.enabled
+			stream.reader.mu.Unlock()
+			if enabled {
+				t.Fatal("reader remained enabled during CLOSE")
+			}
+			release()
+			select {
+			case <-readReturned:
+			case <-time.After(time.Second):
+				t.Fatal("source did not return its in-flight result")
+			}
+			select {
+			case err := <-done:
+				finished = true
+				t.Fatalf("copy finished before CLOSE completed: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			stream.writer.mu.Unlock()
+			writerLocked = false
+			select {
+			case <-closeDone:
+			case <-time.After(time.Second):
+				t.Fatal("CLOSE did not finish")
+			}
+			select {
+			case err := <-done:
+				finished = true
+				t.Fatalf("copy finished before reopening: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			// A non-EOF read can reach the writer while CLOSE is still
+			// updating it. Either gate may win that boundary race; EOF,
+			// however, must remain held by the already-closed reader.
+			if got := stdout.String(); got != "" && (result != "data then EOF" || got != "retained transition chunk") {
+				t.Fatalf("unexpected bytes before reopening: %q", got)
+			}
+			stream.setState(stateOpen)
+			select {
+			case err := <-done:
+				finished = true
+				if err != nil {
+					t.Fatalf("copy returned error: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("copy did not finish after reopening")
+			}
+			want, wantReads := "retained transition chunk", 1
+			if result == "EOF only" {
+				want = ""
+			}
+			if result == "data then EOF" {
+				wantReads = 2
+			}
+			if got := stdout.String(); got != want {
+				t.Fatalf("output = %q, want %q", got, want)
+			}
+			if reads != wantReads {
+				t.Fatalf("source reads = %d, want %d", reads, wantReads)
+			}
+		})
+	}
+}
+
+func TestStream_OpenReleasesWriterBeforeReader(t *testing.T) {
+	stdout := newLockedBuffer()
+	stream := newStream(strings.NewReader(""), stdout, modeBlock)
+	stream.setState(stateClosed)
+	stream.writer.mu.Lock()
+	writerChanged := stream.writer.changed
+	stream.writer.mu.Unlock()
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := stream.writer.Write([]byte("pending chunk"))
+		writeDone <- err
+	}()
+	stream.reader.mu.Lock()
+	openDone := make(chan struct{})
+	go func() {
+		stream.setState(stateOpen)
+		close(openDone)
+	}()
+	writeFinished := false
+	defer func() {
+		stream.reader.mu.Unlock()
+		select {
+		case <-openDone:
+		case <-time.After(time.Second):
+			t.Error("OPEN did not finish during cleanup")
+		}
+		if !writeFinished {
+			select {
+			case <-writeDone:
+			case <-time.After(time.Second):
+				t.Error("pending write did not finish during cleanup")
+			}
+		}
+	}()
+	select {
+	case <-writerChanged:
+	case <-time.After(time.Second):
+		t.Fatal("OPEN did not release the writer before updating the blocked reader")
+	}
+	select {
+	case err := <-writeDone:
+		writeFinished = true
+		if err != nil {
+			t.Fatalf("pending write returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending write did not finish while OPEN was updating the reader")
+	}
+	if got := stdout.String(); got != "pending chunk" {
+		t.Fatalf("output = %q, want pending chunk", got)
+	}
+}
+
 func TestRun_InFlightEOFOnlyCompletesAfterReopen(t *testing.T) {
 	events := newTestEventSink(t)
 	readStarted := make(chan struct{})

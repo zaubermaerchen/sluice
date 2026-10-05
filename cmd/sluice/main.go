@@ -414,8 +414,16 @@ func newStream(source io.Reader, destination io.Writer, mode streamMode) *stream
 }
 
 func (s *stream) setState(state streamState) {
+	if state == stateClosed {
+		// Gate reads (including in-flight EOF) before publishing CLOSED to
+		// the writer; otherwise EOF can escape between the gate updates.
+		s.reader.setEnabled(s.mode == modeDiscard)
+		s.writer.setState(state)
+		return
+	}
+	// Release retained writes before allowing reads to resume.
 	s.writer.setState(state)
-	s.reader.setEnabled(state == stateOpen || s.mode == modeDiscard)
+	s.reader.setEnabled(true)
 }
 
 func runStateMachine(stdin io.Reader, stdout, stderr io.Writer, cfg config) int {
