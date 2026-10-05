@@ -113,8 +113,10 @@ Parse errors write to stderr, exit with code 2, and include a short `--help`
 hint without full usage. Configuration and startup validation errors write to
 stderr and exit with code 2 without full usage. Runtime I/O errors normally
 write synchronously to stderr and exit with code 1 without usage; if an event
-warning holds stderr, the diagnostic is best effort and may be omitted without
-delaying exit.
+warning is in progress, sluice waits up to 100ms for it to finish before
+writing the primary diagnostic synchronously. If the warning does not finish
+in that contention grace period, the diagnostic is omitted and sluice exits
+with code 1. The grace period does not limit the primary diagnostic write itself.
 
 `--version` prints the version and must be used by itself, without
 normal-operation arguments.
@@ -152,8 +154,11 @@ event, `sluice` immediately disables further event output and continues its
 normal stream behavior. It asynchronously attempts one stderr warning; warning
 delivery is best effort, and process exit does not wait for the warning to
 finish. Delivery before process termination is not guaranteed. If the warning
-is holding stderr when a primary I/O error occurs, its diagnostic is also best
-effort and may be omitted so the process can exit with its original status.
+is in progress when a primary I/O error occurs, sluice waits up to 100ms for
+the warning to finish, then writes the primary diagnostic synchronously. If
+the warning does not finish in that contention grace period, the primary
+diagnostic is omitted so the process can exit with its original status. This
+100ms bounds only warning contention, not the primary diagnostic write itself.
 Ordinary primary diagnostics remain synchronous. A failed nonblocking socket
 write may leave a partial final JSON line; consumers should discard an
 incomplete line after an event-stream failure.

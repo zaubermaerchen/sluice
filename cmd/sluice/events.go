@@ -94,9 +94,15 @@ func (emitter *eventEmitter) close() {
 	emitter.mu.Unlock()
 }
 
+// This grace period preserves primary diagnostics during brief warning writes
+// without letting a side-channel warning indefinitely delay CLI termination.
+// It limits contention waiting, not the primary diagnostic's own stderr write.
+const eventWarningContentionGrace = 100 * time.Millisecond
+
 type diagnosticWriter struct {
-	writer io.Writer
-	mu     sync.Mutex
+	writer      io.Writer
+	mu          sync.Mutex
+	warningDone chan struct{}
 }
 
 func newDiagnosticWriter(writer io.Writer) *diagnosticWriter {
@@ -105,22 +111,64 @@ func newDiagnosticWriter(writer io.Writer) *diagnosticWriter {
 
 func (writer *diagnosticWriter) Write(p []byte) (int, error) {
 	writer.mu.Lock()
+	for writer.warningDone != nil {
+		done := writer.warningDone
+		writer.mu.Unlock()
+		<-done
+		writer.mu.Lock()
+	}
 	defer writer.mu.Unlock()
 	return writer.writer.Write(p)
 }
 
-// Primary errors normally write synchronously. A stalled event warning must not
-// hold up termination; when it owns stderr, leave this diagnostic undelivered
-// rather than starting another goroutine that could also remain blocked.
+func (writer *diagnosticWriter) writeWarning(message string) {
+	writer.mu.Lock()
+	done := make(chan struct{})
+	writer.warningDone = done
+	writer.mu.Unlock()
+	_, _ = io.WriteString(writer.writer, message)
+	writer.mu.Lock()
+	writer.warningDone = nil
+	// Publish completion only after the write has returned; subsequent writes
+	// still acquire mu, preserving serialization even at the timeout boundary.
+	close(done)
+	writer.mu.Unlock()
+}
+
+// Primary errors remain synchronous unless an active event warning outlasts
+// the contention grace period. No additional goroutine is needed for reporting.
 func reportPrimaryFailure(diagnostics io.Writer, format string, args ...any) {
 	if writer, ok := diagnostics.(*diagnosticWriter); ok {
-		if !writer.mu.TryLock() {
-			return
+		writer.mu.Lock()
+		if done := writer.warningDone; done != nil {
+			writer.mu.Unlock()
+			timer := time.NewTimer(eventWarningContentionGrace)
+			defer timer.Stop()
+			if !waitEventWarning(done, timer.C) {
+				return
+			}
+			writer.mu.Lock()
 		}
 		defer writer.mu.Unlock()
 		diagnostics = writer.writer
 	}
 	_, _ = fmt.Fprintf(diagnostics, format, args...)
+}
+
+func waitEventWarning(done <-chan struct{}, graceExpired <-chan time.Time) bool {
+	select {
+	case <-done:
+		return true
+	case <-graceExpired:
+		// Both notifications can be ready after the reporter is rescheduled.
+		// A completed warning still permits the synchronous primary diagnostic.
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 func reportEventFailure(diagnostics io.Writer, err error) {
@@ -133,6 +181,10 @@ func reportEventFailure(diagnostics io.Writer, err error) {
 	// stream state machine or data copy. Exit never waits for this one attempt,
 	// so delivery before process termination is not guaranteed.
 	go func() {
+		if writer, ok := diagnostics.(*diagnosticWriter); ok {
+			writer.writeWarning(message)
+			return
+		}
 		_, _ = io.WriteString(diagnostics, message)
 	}()
 }
