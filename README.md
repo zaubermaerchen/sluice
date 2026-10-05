@@ -111,8 +111,10 @@ Use `-h` or `--help` for the command summary. Help takes priority over all
 other arguments regardless of order, writes to stdout, and exits with code 0.
 Parse errors write to stderr, exit with code 2, and include a short `--help`
 hint without full usage. Configuration and startup validation errors write to
-stderr and exit with code 2 without full usage. Runtime I/O errors write to
-stderr and exit with code 1 without usage.
+stderr and exit with code 2 without full usage. Runtime I/O errors normally
+write synchronously to stderr and exit with code 1 without usage; if an event
+warning holds stderr, the diagnostic is best effort and may be omitted without
+delaying exit.
 
 `--version` prints the version and must be used by itself, without
 normal-operation arguments.
@@ -141,15 +143,20 @@ before reading stdin when the descriptor is unsuitable. Keep the mode enabled
 while `sluice` is running because the duplicate shares the descriptor's open
 file description; `sluice` does not change the caller's descriptor flags.
 The destination is also checked before each event write. If its mode becomes
-unsuitable or its consumer disconnects, event output is disabled with one
-warning and normal stream processing continues. The checks reduce the risk of
+unsuitable or its consumer disconnects, event output is immediately disabled
+and normal stream processing continues. The checks reduce the risk of
 blocking the stream, but cannot prevent a mode change racing with a write.
 
 Event writes are immediate and nonblocking. If the descriptor cannot accept an
-event, `sluice` warns once on stderr, disables further event output, and
-continues its normal stream behavior. A failed nonblocking socket write may
-leave a partial final JSON line; consumers should discard an incomplete line
-after an event-stream failure.
+event, `sluice` immediately disables further event output and continues its
+normal stream behavior. It asynchronously attempts one stderr warning; warning
+delivery is best effort, and process exit does not wait for the warning to
+finish. Delivery before process termination is not guaranteed. If the warning
+is holding stderr when a primary I/O error occurs, its diagnostic is also best
+effort and may be omitted so the process can exit with its original status.
+Ordinary primary diagnostics remain synchronous. A failed nonblocking socket
+write may leave a partial final JSON line; consumers should discard an
+incomplete line after an event-stream failure.
 
 At high event rates, the consumer may not keep up; if the descriptor cannot
 accept an event, the existing write-failure behavior disables further event

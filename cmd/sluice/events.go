@@ -109,6 +109,20 @@ func (writer *diagnosticWriter) Write(p []byte) (int, error) {
 	return writer.writer.Write(p)
 }
 
+// Primary errors normally write synchronously. A stalled event warning must not
+// hold up termination; when it owns stderr, leave this diagnostic undelivered
+// rather than starting another goroutine that could also remain blocked.
+func reportPrimaryFailure(diagnostics io.Writer, format string, args ...any) {
+	if writer, ok := diagnostics.(*diagnosticWriter); ok {
+		if !writer.mu.TryLock() {
+			return
+		}
+		defer writer.mu.Unlock()
+		diagnostics = writer.writer
+	}
+	_, _ = fmt.Fprintf(diagnostics, format, args...)
+}
+
 func reportEventFailure(diagnostics io.Writer, err error) {
 	if diagnostics == nil {
 		return
@@ -116,7 +130,8 @@ func reportEventFailure(diagnostics io.Writer, err error) {
 	message := fmt.Sprintf("sluice: events disabled: %v\n", err)
 	// A diagnostic writer can be a pipe whose reader is stalled. Reporting in a
 	// separate goroutine keeps a failed observation path from stopping the
-	// stream state machine or data copy.
+	// stream state machine or data copy. Exit never waits for this one attempt,
+	// so delivery before process termination is not guaranteed.
 	go func() {
 		_, _ = io.WriteString(diagnostics, message)
 	}()

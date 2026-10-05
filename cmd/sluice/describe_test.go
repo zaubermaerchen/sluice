@@ -40,6 +40,11 @@ func TestRun_DescribeDurationAndEventRateCautionsMatchREADME(t *testing.T) {
 		}},
 		{"event_fd", document.StreamSemantics.EventFD.Description, []string{
 			"At high event rates, the consumer may not keep up",
+			"asynchronously attempts one stderr warning",
+			"process exit does not wait for the warning to finish",
+			"Delivery before process termination is not guaranteed",
+			"its diagnostic is also best effort and may be omitted",
+			"Ordinary primary diagnostics remain synchronous",
 			"if the descriptor cannot accept an event, the existing write-failure behavior disables further event output",
 		}},
 	} {

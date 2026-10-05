@@ -521,7 +521,7 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 		select {
 		case err := <-copyResult:
 			if err != nil {
-				fmt.Fprintf(stderr, "sluice: I/O error: %v\n", err)
+				reportPrimaryFailure(stderr, "sluice: I/O error: %v\n", err)
 				return 1
 			}
 			return 0
@@ -533,7 +533,7 @@ func runStateMachineWithArmer(stdin io.Reader, stdout, stderr io.Writer, cfg con
 			}
 			next, armErr := arm(eventForState(cfg, nextState))
 			if armErr != nil {
-				fmt.Fprintf(stderr, "sluice: cannot arm event: %v\n", armErr)
+				reportPrimaryFailure(stderr, "sluice: cannot arm event: %v\n", armErr)
 				return 1
 			}
 			armed.stop()
