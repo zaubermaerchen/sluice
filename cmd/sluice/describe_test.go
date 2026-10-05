@@ -307,7 +307,8 @@ func TestRun_DescribeMetadataDescribesCurrentCLIAndRuntime(t *testing.T) {
 		}},
 		{"eof_behavior", document.StateMachine.EOFBehavior, []string{
 			"after forwarded bytes are written", "after input is drained", "deferred until OPEN",
-			"read already in flight can observe EOF", "EOF emits no lifecycle event",
+			"EOF returned by a read already in flight while CLOSED", "together with any final bytes",
+			"EOF returned while OPEN does not wait for a later OPEN transition", "EOF emits no lifecycle event",
 		}},
 		{"in_flight_boundary", document.StateMachine.InFlightBoundary, []string{
 			"In block mode", "chunk is held until OPEN", "forwarded exactly once before another read",
