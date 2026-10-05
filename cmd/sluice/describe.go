@@ -103,7 +103,7 @@ func newDescription() description {
 	return description{
 		SchemaVersion: 1,
 		Name:          "sluice",
-		Version:       version,
+		Version:       currentVersion(),
 		CLISchema: cliDescription{
 			Usage: "sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed",
 			Constraints: []string{

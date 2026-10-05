@@ -176,7 +176,7 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 			fmt.Fprintln(stderr, "sluice: --version must be used alone and set to true")
 			return 2
 		}
-		fmt.Fprintf(stdout, "sluice %s\n", version)
+		fmt.Fprintf(stdout, "sluice %s\n", currentVersion())
 		return 0
 	}
 
