@@ -294,3 +294,8 @@ the transition race.
 These CLOSED guarantees apply once the transition is complete. While a
 transition is still underway, boundary bytes may already be forwarded;
 EOF already accepted while OPEN may complete without another OPEN.
+
+## Release maintenance
+
+See [release automation](docs/release-automation.md) for publishing releases,
+Homebrew tap updates, and verification and recovery steps.
