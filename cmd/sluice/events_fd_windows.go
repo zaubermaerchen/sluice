@@ -84,6 +84,9 @@ func writeEvent(file *os.File, data []byte) (int, error) {
 	var writeErr error
 	if err := connection.Control(func(raw uintptr) {
 		handle := windows.Handle(raw)
+		// Pipe mode can change after startup through a shared handle. Recheck
+		// before writing to reduce the risk of blocking the stream; this cannot
+		// prevent a mode change racing with the subsequent write.
 		if err := validateEventDescriptor(uintptr(handle)); err != nil {
 			writeErr = err
 			return

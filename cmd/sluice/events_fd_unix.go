@@ -93,6 +93,9 @@ func writeEvent(file *os.File, data []byte) (int, error) {
 			writeErr = err
 			return
 		}
+		// The duplicate shares flags that can change after startup. Recheck before
+		// writing to reduce the risk of blocking the stream on an unsuitable sink;
+		// a mode change between this check and the write can still race.
 		if err := validateEventDescriptor(raw); err != nil {
 			writeErr = err
 			return

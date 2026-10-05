@@ -194,3 +194,17 @@ func fillWindowsEventPipe(t *testing.T, handle windows.Handle) {
 	}
 	t.Fatalf("filled event pipe without making it unavailable")
 }
+
+func setTestEventNonblocking(t *testing.T, events *testEventSink, enabled bool) {
+	t.Helper()
+	handle := windows.Handle(events.fd)
+	mode := windowsEventPipeMode(t, handle)
+	if enabled {
+		mode |= windows.PIPE_NOWAIT
+	} else {
+		mode &^= windows.PIPE_NOWAIT
+	}
+	if err := windows.SetNamedPipeHandleState(handle, &mode, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
