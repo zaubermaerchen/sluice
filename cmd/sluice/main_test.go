@@ -134,8 +134,8 @@ func TestRun_Version_RejectsExtraArguments(t *testing.T) {
 			if stdout.Len() != 0 {
 				t.Fatalf("expected empty stdout, got %q", stdout.String())
 			}
-			if !strings.Contains(stderr.String(), "Usage of sluice:") {
-				t.Fatalf("expected usage in stderr, got %q", stderr.String())
+			if strings.Contains(stderr.String(), "Usage of sluice:") {
+				t.Fatalf("unexpected usage in stderr: %q", stderr.String())
 			}
 			if test.wantVersionDiagnostic && !strings.Contains(stderr.String(), "sluice: "+wantVersionDiagnostic+"\n") {
 				t.Fatalf("expected version diagnostic %q in stderr, got %q", wantVersionDiagnostic, stderr.String())
@@ -177,8 +177,8 @@ func TestRun_ArgumentValidation(t *testing.T) {
 			if stdout.Len() != 0 {
 				t.Fatalf("expected empty stdout, got %q", stdout.String())
 			}
-			if !strings.Contains(stderr.String(), "Usage of sluice:") {
-				t.Fatalf("expected usage in stderr, got %q", stderr.String())
+			if strings.Contains(stderr.String(), "Usage of sluice:") {
+				t.Fatalf("unexpected usage in stderr: %q", stderr.String())
 			}
 		})
 	}
@@ -501,8 +501,11 @@ func TestRun_ReportsReaderAndWriterErrors(t *testing.T) {
 			"open",
 		})
 
-		if exitCode == 0 {
-			t.Fatal("expected non-zero exit code")
+		if exitCode != 1 {
+			t.Fatalf("expected runtime exit code 1, got %d", exitCode)
+		}
+		if strings.Contains(stderr.String(), "Usage of") || strings.Contains(stderr.String(), "--help") {
+			t.Fatalf("unexpected runtime usage: %q", stderr.String())
 		}
 		if !strings.Contains(stderr.String(), wantErr.Error()) {
 			t.Fatalf("expected reader error %q in stderr, got %q", wantErr, stderr.String())
@@ -519,8 +522,11 @@ func TestRun_ReportsReaderAndWriterErrors(t *testing.T) {
 			"open",
 		})
 
-		if exitCode == 0 {
-			t.Fatal("expected non-zero exit code")
+		if exitCode != 1 {
+			t.Fatalf("expected runtime exit code 1, got %d", exitCode)
+		}
+		if strings.Contains(stderr.String(), "Usage of") || strings.Contains(stderr.String(), "--help") {
+			t.Fatalf("unexpected runtime usage: %q", stderr.String())
 		}
 		if !strings.Contains(stderr.String(), wantErr.Error()) {
 			t.Fatalf("expected writer error %q in stderr, got %q", wantErr, stderr.String())
@@ -557,106 +563,85 @@ var _ io.Reader = errorReader{}
 var _ io.Writer = errorWriter{}
 
 func TestRun_Help(t *testing.T) {
-	wantContent := []string{
-		"  sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed",
-		"open|closed is the initial stream state",
-		"signal event forms and examples are POSIX-only",
-		"signal:USR1 / signal:SIGUSR1",
-		"signal:USR2 / signal:SIGUSR2",
-		"duration:DURATION",
-		"block: do not read stdin while closed; propagates backpressure upstream",
-		"discard: read and discard stdin while closed",
-		"sluice --open signal:USR1 --close signal:USR2 closed",
-		"sluice --open signal:USR1 --close signal:USR1 closed",
-		"sluice --open duration:5s --close duration:10s closed",
-		"(default block)",
-	}
-
-	for _, args := range [][]string{{"-h"}, {"--help"}} {
+	for _, args := range [][]string{
+		{"-h"}, {"--help"}, {"-help"}, {"--h"},
+		{"--help", "--unknown"}, {"--unknown", "--help"},
+		{"closed", "--mode", "bad", "-h"}, {"--describe=false", "--help"},
+		{"--version", "--help"}, {"--mode", "--help"}, {"--", "--help"},
+		{"--unknown", "--help=true"}, {"closed", "--help=false"}, {"--", "-h=false"}, {"--unknown", "-help=invalid"}, {"open", "--h=true"},
+	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			var stdout bytes.Buffer
-			var stderr bytes.Buffer
+			var stdout, stderr bytes.Buffer
 			stdin := &trackingReader{}
-
-			exitCode := runWithIO(stdin, &stdout, &stderr, args)
-
-			if exitCode != 0 {
-				t.Fatalf("expected exit code 0, got %d", exitCode)
+			if code := runWithIO(stdin, &stdout, &stderr, args); code != 0 {
+				t.Fatalf("exit = %d; stderr = %q", code, stderr.String())
 			}
-
-			if stdout.Len() != 0 {
-				t.Fatalf("expected empty stdout, got %q", stdout.String())
+			if stderr.Len() != 0 || stdin.read {
+				t.Fatalf("stderr = %q, stdin read = %v", stderr.String(), stdin.read)
 			}
-
-			got := stderr.String()
-			if !strings.Contains(got, "Usage of sluice:") {
-				t.Fatalf("expected usage in stderr, got %q", got)
-			}
-			if strings.Contains(got, "Usage: sluice") {
-				t.Fatalf("expected one usage heading, got %q", got)
-			}
-
-			for _, content := range wantContent {
-				if !strings.Contains(got, content) {
-					t.Fatalf("expected help to contain %q, got %q", content, got)
+			for _, text := range []string{"Usage of sluice:", "open|closed is the initial stream state", "signal event forms and examples are POSIX-only", "signal:USR1 / signal:SIGUSR1", "duration:DURATION", "block: do not read stdin while closed; propagates backpressure upstream", "discard: read and discard stdin while closed", "signal:USR2 / signal:SIGUSR2", "sluice --open signal:USR1 --close signal:USR2 closed", "sluice --open signal:USR1 --close signal:USR1 closed", "sluice --open duration:5s --close duration:10s closed", "--mode", "--open", "--close", "--events-fd", "--version", "--describe", "--help", "(default block)"} {
+				if !strings.Contains(stdout.String(), text) {
+					t.Errorf("help missing %q: %s", text, &stdout)
 				}
 			}
-
-			if !strings.Contains(got, "-version") {
-				t.Fatalf("expected version flag in usage, got %q", got)
+			if strings.Count(stdout.String(), "Usage of sluice:") != 1 {
+				t.Fatalf("expected one usage heading: %q", stdout.String())
 			}
-			if stdin.read {
-				t.Fatal("expected help mode not to read stdin")
+			for _, line := range strings.Split(stdout.String(), "\n") {
+				if strings.HasPrefix(line, "  -") && !strings.HasPrefix(line, "  --") {
+					t.Errorf("single-dash option in help: %q", line)
+				}
 			}
 		})
 	}
 }
 
-func TestRun_InvalidFlag(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	exitCode := run(&stdout, &stderr, []string{"--unknown"})
-
-	if exitCode != 2 {
-		t.Fatalf("expected exit code 2, got %d", exitCode)
-	}
-
-	if stdout.Len() != 0 {
-		t.Fatalf("expected empty stdout, got %q", stdout.String())
-	}
-
-	got := stderr.String()
-	if !strings.Contains(got, "flag provided but not defined: -unknown") {
-		t.Fatalf("expected invalid flag error in stderr, got %q", got)
-	}
-
-	if !strings.Contains(got, "Usage of sluice:") {
-		t.Fatalf("expected usage in stderr, got %q", got)
+func TestRun_ParseErrors(t *testing.T) {
+	for _, tc := range []struct {
+		args       []string
+		diagnostic string
+	}{
+		{[]string{"--unknown"}, "flag provided but not defined: --unknown"},
+		{[]string{"-unknown"}, "flag provided but not defined: --unknown"},
+		{[]string{"--mode"}, "flag needs an argument: --mode"},
+		{[]string{"-mode", "block", "-mode", "discard"}, "for flag --mode: flag specified more than once"},
+		{[]string{"--version=bad"}, "for --version"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			input := &trackingReader{}
+			code := runWithIO(input, &stdout, &stderr, tc.args)
+			if code != 2 || stdout.Len() != 0 || input.read {
+				t.Fatalf("exit=%d stdout=%q read=%v", code, stdout.String(), input.read)
+			}
+			if !strings.Contains(stderr.String(), tc.diagnostic) || !strings.Contains(stderr.String(), "--help") || strings.Contains(stderr.String(), "Usage of") {
+				t.Fatalf("stderr = %q", stderr.String())
+			}
+		})
 	}
 }
 
-func TestRun_HelpWithInvalidFlag(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	exitCode := run(&stdout, &stderr, []string{"--help", "--unknown"})
-
-	if exitCode != 0 {
-		t.Fatalf("expected exit code 0, got %d", exitCode)
+func TestRun_ArgumentOrder(t *testing.T) {
+	for _, args := range [][]string{
+		{"closed", "--open", "duration:1h", "--close", "duration:1h"},
+		{"--open", "duration:1h", "--close", "duration:1h", "open", "-mode", "block"},
+		{"--", "open", "--unknown"},
+	} {
+		var stdout, stderr bytes.Buffer
+		input := &trackingReader{}
+		if code := runWithIO(input, &stdout, &stderr, args); code != 2 {
+			t.Fatalf("exit = %d", code)
+		}
+		if stdout.Len() != 0 || input.read || !strings.Contains(stderr.String(), "argument order") || strings.Contains(stderr.String(), "--open is required") || strings.Contains(stderr.String(), "Usage of") {
+			t.Fatalf("args=%q stdout=%q stderr=%q read=%v", args, stdout.String(), stderr.String(), input.read)
+		}
 	}
+}
 
-	if stdout.Len() != 0 {
-		t.Fatalf("expected empty stdout, got %q", stdout.String())
-	}
-
-	got := stderr.String()
-	if !strings.Contains(got, "Usage of sluice:") {
-		t.Fatalf("expected usage in stderr, got %q", got)
-	}
-
-	if strings.Contains(got, "flag provided but not defined") {
-		t.Fatalf("did not expect invalid flag error when help is requested, got %q", got)
+func TestRun_HelpEmbeddedInValueIsNotRequested(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runWithIO(&trackingReader{}, &stdout, &stderr, []string{"--open=--help", "--close=duration:1h", "open"}); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "invalid --open event") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

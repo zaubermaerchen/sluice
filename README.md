@@ -62,6 +62,10 @@ provide platform archives containing the binary, `LICENSE`, and this
 sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed
 ```
 
+Options must precede the initial state; an option after the state is an
+argument-order error. Existing single-dash long options remain accepted for
+compatibility; documentation, help, and diagnostics use `--long-option`.
+
 The final argument is the initial state:
 
 - `open` starts by forwarding stdin to stdout.
@@ -103,14 +107,20 @@ immediately, very short durations can cause rapid state transitions and high
 CPU usage. If the opposite condition waits, a short duration alone does not
 cause continuous transitions.
 
-Use `-h` or `--help` for the command summary. `--version` prints the version
-and must be used by itself, without normal-operation arguments.
+Use `-h` or `--help` for the command summary. Help takes priority over all
+other arguments regardless of order, writes to stdout, and exits with code 0.
+Parse errors write to stderr, exit with code 2, and include a short `--help`
+hint without full usage. Configuration and startup validation errors write to
+stderr and exit with code 2 without full usage. Runtime I/O errors write to
+stderr and exit with code 1 without usage.
+
+`--version` prints the version and must be used by itself, without
+normal-operation arguments.
 `--describe` prints one deterministic, machine-readable JSON description of the
 current CLI, stream semantics, state machine, and platform capabilities. It
-also must be used by itself; when `--help` is parsed, flag parsing prints help
-before describe validation. Its `schema_version` starts at `1`; consumers
-should ignore unknown fields, while existing field meanings remain compatible
-within a schema version.
+also must be used by itself; help takes priority over describe validation. Its
+`schema_version` starts at `1`; consumers should ignore unknown fields, while
+existing field meanings remain compatible within a schema version.
 
 ### Lifecycle events
 

@@ -384,8 +384,8 @@ func TestRun_DescribeHelpHasPriority(t *testing.T) {
 			if got := runWithIO(stdin, &output, &diagnostics, args); got != 0 {
 				t.Fatalf("runWithIO() exit code = %d, want 0; diagnostics = %q", got, diagnostics.String())
 			}
-			if output.Len() != 0 || !strings.Contains(diagnostics.String(), "Usage of sluice:") {
-				t.Fatalf("output = %q, diagnostics = %q; want help on stderr", output.String(), diagnostics.String())
+			if diagnostics.Len() != 0 || !strings.Contains(output.String(), "Usage of sluice:") {
+				t.Fatalf("output = %q, diagnostics = %q; want help on stdout", output.String(), diagnostics.String())
 			}
 			if strings.Contains(diagnostics.String(), "--describe must be used") || stdin.read {
 				t.Fatalf("describe handling ran before help: diagnostics = %q, stdin read = %v", diagnostics.String(), stdin.read)
@@ -427,7 +427,7 @@ func TestRun_DescribeRejectsInvalidCombinationsWithoutRuntimeValidation(t *testi
 			if got := runWithIO(stdin, &output, &diagnostics, args); got != 2 {
 				t.Fatalf("runWithIO() exit code = %d, want 2; output = %q; diagnostics = %q", got, output.String(), diagnostics.String())
 			}
-			if output.Len() != 0 || !strings.Contains(diagnostics.String(), "Usage of sluice:") {
+			if output.Len() != 0 || strings.Contains(diagnostics.String(), "Usage of sluice:") {
 				t.Fatalf("output = %q, diagnostics = %q; want usage error", output.String(), diagnostics.String())
 			}
 			if !strings.Contains(diagnostics.String(), "--describe must be used alone and set to true") {
@@ -474,4 +474,19 @@ func describeContainsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestRun_DescribeCLIContractMatchesREADME(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ignore Markdown inline-code delimiters and wrapping when comparing prose.
+	text := strings.Join(strings.Fields(strings.ReplaceAll(string(readme), "`", "")), " ")
+	document := newDescription()
+	for _, constraint := range document.CLISchema.Constraints[1:] {
+		if !strings.Contains(text, constraint) {
+			t.Errorf("README missing CLI contract %q", constraint)
+		}
+	}
 }
