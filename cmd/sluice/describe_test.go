@@ -314,6 +314,8 @@ func TestRun_DescribeMetadataDescribesCurrentCLIAndRuntime(t *testing.T) {
 			"In block mode", "chunk is held until OPEN", "forwarded exactly once before another read",
 			"no new read starts while CLOSED", "destination write already in flight may complete after CLOSED",
 			"In discard mode", "may be forwarded or discarded",
+			"once the transition is complete", "transition is still underway",
+			"EOF already accepted while OPEN may complete without another OPEN",
 		}},
 		{"stdout", document.StreamSemantics["stdout"].Description, []string{
 			"In block mode", "chunk is held until OPEN", "forwarded exactly once before another read",

@@ -285,3 +285,6 @@ no new read starts while CLOSED. A destination write already in flight may
 complete after CLOSED, so there is no strict transition-boundary cutoff.
 In `discard` mode, boundary bytes may be forwarded or discarded according to
 the transition race.
+These CLOSED guarantees apply once the transition is complete. While a
+transition is still underway, boundary bytes may already be forwarded;
+EOF already accepted while OPEN may complete without another OPEN.
