@@ -180,7 +180,7 @@ func newDescription() description {
 			SameEventToggles:          true,
 			DurationArming:            "A duration starts when its corresponding transition event is armed for the current state, and restarts whenever that state is re-entered.",
 			EOFBehavior:               "EOF while OPEN succeeds after forwarded bytes are written; EOF while CLOSED in discard mode succeeds after input is drained; CLOSED block mode does not read while closed, so EOF from the normal CLOSED/block path is deferred until OPEN. A read already in flight can observe EOF according to the transition race. EOF emits no lifecycle event.",
-			InFlightBoundary:          "A transition racing with a read or write already in flight has no guarantee stronger than normal concurrent pipe I/O; boundary bytes may be forwarded or discarded according to that race.",
+			InFlightBoundary:          "In block mode, a read already in flight when CLOSED may complete; its chunk is held until OPEN, then forwarded exactly once before another read, and no new read starts while CLOSED. A destination write already in flight may complete after CLOSED, so there is no strict transition-boundary cutoff. In discard mode, boundary bytes may be forwarded or discarded according to the transition race.",
 		},
 		SideEffects: []sideEffect{},
 	}
@@ -197,7 +197,7 @@ func descriptionStreamSemantics() streamDescription {
 		Stdout: streamInterfaceDescription{
 			Role:        "passthrough",
 			Supported:   true,
-			Description: "Primary output stream containing input bytes forwarded while OPEN and suppressed while CLOSED. A transition racing with a read or write already in flight has no stricter boundary guarantee than normal concurrent pipe I/O.",
+			Description: "Primary output stream containing input bytes forwarded while OPEN. In block mode, an in-flight read's chunk is held until OPEN and forwarded exactly once before another read. In discard mode, bytes are suppressed while CLOSED. A destination write already in flight may complete after CLOSED, so there is no strict transition-boundary cutoff.",
 		},
 		Stderr: streamInterfaceDescription{
 			Role:        "diagnostics",

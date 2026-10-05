@@ -354,27 +354,43 @@ func (r *gatedReader) Read(p []byte) (int, error) {
 
 type stateWriter struct {
 	destination io.Writer
-	mu          sync.RWMutex
+	mu          sync.Mutex
 	open        bool
+	mode        streamMode
+	changed     chan struct{}
 }
 
 func (w *stateWriter) setState(state streamState) {
 	w.mu.Lock()
-	w.open = state == stateOpen
-	w.mu.Unlock()
+	defer w.mu.Unlock()
+	open := state == stateOpen
+	if w.open == open {
+		return
+	}
+	w.open = open
+	close(w.changed)
+	w.changed = make(chan struct{})
 }
 
 func (w *stateWriter) Write(p []byte) (int, error) {
-	w.mu.RLock()
-	open := w.open
-	destination := w.destination
-	w.mu.RUnlock()
-	if !open {
-		// A state change may race with an in-flight Read or Write; boundary bytes
-		// follow normal concurrent pipe semantics rather than a strict cutoff.
-		return len(p), nil
+	for {
+		w.mu.Lock()
+		if w.open {
+			destination := w.destination
+			w.mu.Unlock()
+			// Keep state transitions independent of a blocked destination write.
+			return destination.Write(p)
+		}
+		if w.mode == modeDiscard {
+			w.mu.Unlock()
+			return len(p), nil
+		}
+		// Retain the current io.Copy chunk if an OPEN read finishes after
+		// CLOSED; returning success here would silently discard those bytes.
+		changed := w.changed
+		w.mu.Unlock()
+		<-changed
 	}
-	return destination.Write(p)
 }
 
 type stream struct {
@@ -386,7 +402,7 @@ type stream struct {
 func newStream(source io.Reader, destination io.Writer, mode streamMode) *stream {
 	return &stream{
 		reader: newGatedReader(source),
-		writer: &stateWriter{destination: destination},
+		writer: &stateWriter{destination: destination, mode: mode, changed: make(chan struct{})},
 		mode:   mode,
 	}
 }

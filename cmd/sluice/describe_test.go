@@ -310,7 +310,13 @@ func TestRun_DescribeMetadataDescribesCurrentCLIAndRuntime(t *testing.T) {
 			"read already in flight can observe EOF", "EOF emits no lifecycle event",
 		}},
 		{"in_flight_boundary", document.StateMachine.InFlightBoundary, []string{
-			"no guarantee stronger than normal concurrent pipe I/O", "may be forwarded or discarded",
+			"In block mode", "chunk is held until OPEN", "forwarded exactly once before another read",
+			"no new read starts while CLOSED", "destination write already in flight may complete after CLOSED",
+			"In discard mode", "may be forwarded or discarded",
+		}},
+		{"stdout", document.StreamSemantics["stdout"].Description, []string{
+			"In block mode", "chunk is held until OPEN", "forwarded exactly once before another read",
+			"In discard mode", "bytes are suppressed while CLOSED",
 		}},
 	} {
 		for _, phrase := range contract.phrases {

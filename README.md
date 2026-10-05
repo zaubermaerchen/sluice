@@ -63,6 +63,8 @@ The final argument is the initial state:
 
 `block` is the default mode. While CLOSED it does not read stdin, so an
 upstream writer can block and backpressure propagates through the pipeline.
+An in-flight read may still complete; its chunk is held until OPEN without
+starting another read while CLOSED.
 `discard` continues reading stdin while CLOSED but drops those bytes.
 
 Only the event that can leave the current state is armed. `--open` is armed
@@ -277,7 +279,9 @@ printf '%s\n' 'discarded' |
   CLOSED/block path is deferred until OPEN. A read already in flight can
   observe EOF according to the transition race.
 
-If a state transition races with a read or write already in flight, those
-boundary bytes follow normal concurrent pipe behavior. `sluice` does not
-provide a strict transition-boundary cutoff, so a byte at the boundary may be
-forwarded or discarded according to that race.
+In `block` mode, a read already in flight when the stream closes may complete.
+Its chunk is held until OPEN, then forwarded exactly once before another read;
+no new read starts while CLOSED. A destination write already in flight may
+complete after CLOSED, so there is no strict transition-boundary cutoff.
+In `discard` mode, boundary bytes may be forwarded or discarded according to
+the transition race.
