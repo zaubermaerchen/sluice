@@ -113,7 +113,7 @@ func newDescription() description {
 				"Help takes priority over all other arguments regardless of order, writes to stdout, and exits with code 0.",
 				"Parse errors write to stderr, exit with code 2, and include a short --help hint without full usage.",
 				"Configuration and startup validation errors write to stderr and exit with code 2 without full usage.",
-				"Runtime I/O errors write to stderr and exit with code 1 without usage.",
+				"Runtime I/O errors normally write synchronously to stderr and exit with code 1 without usage; if an event warning holds stderr, the diagnostic is best effort and may be omitted without delaying exit.",
 			},
 			Options: []cliOptionDescription{
 				{
@@ -220,7 +220,7 @@ func eventFDPlatformDescription() streamInterfaceDescription {
 		Supported:   true,
 		Format:      "jsonl",
 		Option:      "--events-fd",
-		Description: "Optional machine-readable observation plane for committed OPEN/CLOSED transitions. N must be at least 3. On supported platforms the caller must supply a writable FIFO/socket or named pipe that is already in the required nonblocking mode and keep that mode enabled; startup rejects descriptors that fail platform validation with usage status 2 before stdin is read. Sluice duplicates the descriptor without taking ownership of the caller's descriptor or changing its flags. Writes are immediate and nonblocking; a failed write attempts one stderr warning, disables further event output, and leaves normal stream behavior running. At high event rates, the consumer may not keep up; if the descriptor cannot accept an event, the existing write-failure behavior disables further event output as described above. The initial state and EOF produce no lifecycle event.",
+		Description: "Optional machine-readable observation plane for committed OPEN/CLOSED transitions. N must be at least 3. On supported platforms the caller must supply a writable FIFO/socket or named pipe that is already in the required nonblocking mode and keep that mode enabled; startup rejects descriptors that fail platform validation with usage status 2 before stdin is read. Sluice duplicates the descriptor without taking ownership of the caller's descriptor or changing its flags. Writes are immediate and nonblocking; a failed write immediately disables further event output and leaves normal stream behavior running. It asynchronously attempts one stderr warning; warning delivery is best effort, and process exit does not wait for the warning to finish. Delivery before process termination is not guaranteed. If the warning is holding stderr when a primary I/O error occurs, its diagnostic is also best effort and may be omitted so the process can exit with its original status. Ordinary primary diagnostics remain synchronous. At high event rates, the consumer may not keep up; if the descriptor cannot accept an event, the existing write-failure behavior disables further event output as described above. The initial state and EOF produce no lifecycle event.",
 	}
 	supported, acceptedTypes, nonblockingMode := eventFDPlatform()
 	description.Supported = supported

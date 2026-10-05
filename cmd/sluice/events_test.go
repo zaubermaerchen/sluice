@@ -6,10 +6,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -533,5 +536,190 @@ func assertTestLifecycleEvents(t *testing.T, records []testLifecycleEvent, want 
 		if got := records[index].Event; got != event {
 			t.Errorf("event %d = %q, want %q", index, got, event)
 		}
+	}
+}
+
+type releaseErrorReader struct {
+	release <-chan struct{}
+	err     error
+}
+
+func (reader releaseErrorReader) Read([]byte) (int, error) {
+	<-reader.release
+	return 0, reader.err
+}
+
+type overlapDiagnosticWriter struct {
+	active       int32
+	firstStarted chan struct{}
+	releaseCh    chan struct{}
+	overlap      chan struct{}
+	firstOnce    sync.Once
+	overlapOnce  sync.Once
+	mu           sync.Mutex
+	data         bytes.Buffer
+	written      chan struct{}
+	finished     chan struct{}
+	finishedOnce sync.Once
+}
+
+func newOverlapDiagnosticWriter() *overlapDiagnosticWriter {
+	return &overlapDiagnosticWriter{
+		firstStarted: make(chan struct{}),
+		releaseCh:    make(chan struct{}),
+		overlap:      make(chan struct{}),
+		written:      make(chan struct{}, 4),
+		finished:     make(chan struct{}),
+	}
+}
+
+func (writer *overlapDiagnosticWriter) Write(p []byte) (int, error) {
+	defer func() {
+		writer.written <- struct{}{}
+		writer.finishedOnce.Do(func() { close(writer.finished) })
+	}()
+	if atomic.AddInt32(&writer.active, 1) > 1 {
+		writer.overlapOnce.Do(func() { close(writer.overlap) })
+	}
+	defer atomic.AddInt32(&writer.active, -1)
+	writer.firstOnce.Do(func() {
+		close(writer.firstStarted)
+		<-writer.releaseCh
+	})
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.data.Write(p)
+}
+
+func (writer *overlapDiagnosticWriter) release() {
+	select {
+	case <-writer.releaseCh:
+	default:
+		close(writer.releaseCh)
+	}
+}
+
+func (writer *overlapDiagnosticWriter) String() string {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.data.String()
+}
+
+func TestRunEventsFDStalledWarningDoesNotDelayExit(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "EOF", err: io.EOF, status: 0},
+		{name: "primary I/O error", err: errors.New("copy failed"), status: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			events := newTestEventSink(t)
+			diagnostics := newOverlapDiagnosticWriter()
+			done := make(chan int, 1)
+			exited := make(chan struct{})
+			t.Cleanup(func() {
+				diagnostics.release()
+				select {
+				case <-exited:
+				case <-time.After(time.Second):
+					t.Error("run goroutine did not finish during cleanup")
+				}
+				select {
+				case <-diagnostics.finished:
+				case <-time.After(time.Second):
+					t.Error("warning goroutine did not finish during cleanup")
+				}
+			})
+			ready := make(chan struct{})
+			close(ready)
+			calls := 0
+			arm := func(event) (armedEvent, error) {
+				calls++
+				if calls == 1 {
+					// Fail the first event after the startup descriptor check.
+					_ = events.reader.Close()
+					return armedEvent{ch: ready, stop: func() {}}, nil
+				}
+				return armedEvent{ch: make(chan struct{}), stop: func() {}}, nil
+			}
+			go func() {
+				defer close(exited)
+				done <- runStateMachineWithArmer(releaseErrorReader{
+					release: diagnostics.firstStarted, err: test.err,
+				}, io.Discard, diagnostics, config{
+					mode: modeBlock, initial: stateClosed,
+					open: event{kind: eventDuration}, close: event{kind: eventDuration},
+					eventsFD: events.fd, eventsFDSet: true,
+				}, arm)
+			}()
+			select {
+			case status := <-done:
+				if status != test.status {
+					t.Fatalf("run status = %d, want %d", status, test.status)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("run waited for stalled event warning")
+			}
+			diagnostics.release()
+			select {
+			case <-diagnostics.written:
+			case <-time.After(time.Second):
+				t.Fatal("released warning did not finish")
+			}
+			select {
+			case <-diagnostics.overlap:
+				t.Fatal("event warning and primary diagnostic overlapped")
+			default:
+			}
+			if text := diagnostics.String(); strings.Count(text, "events disabled:") != 1 || strings.Contains(text, "I/O error:") {
+				t.Fatalf("diagnostics = %q, want only one event warning", text)
+			}
+		})
+	}
+}
+
+func TestRunEventsFDPrimaryDiagnosticRemainsSynchronous(t *testing.T) {
+	events := newTestEventSink(t)
+	diagnostics := newOverlapDiagnosticWriter()
+	done := make(chan int, 1)
+	exited := make(chan struct{})
+	t.Cleanup(func() {
+		diagnostics.release()
+		select {
+		case <-exited:
+		case <-time.After(time.Second):
+			t.Error("run goroutine did not finish during cleanup")
+		}
+	})
+	go func() {
+		defer close(exited)
+		done <- runWithIO(errorReader{err: errors.New("copy failed")}, io.Discard, diagnostics, []string{
+			"--events-fd=" + formatEventFD(events.fd),
+			"--open", "duration:1h", "--close", "duration:1h", "open",
+		})
+	}()
+	select {
+	case <-diagnostics.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("primary diagnostic did not start")
+	}
+	select {
+	case <-done:
+		t.Fatal("run did not wait for ordinary primary diagnostic")
+	case <-time.After(100 * time.Millisecond):
+	}
+	diagnostics.release()
+	select {
+	case status := <-done:
+		if status != 1 {
+			t.Fatalf("run status = %d, want 1", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run did not finish after primary diagnostic")
+	}
+	if text := diagnostics.String(); text != "sluice: I/O error: copy failed\n" {
+		t.Fatalf("diagnostics = %q, want one synchronous primary diagnostic", text)
 	}
 }
