@@ -34,6 +34,12 @@ flow and signals, rather than a strict model of Unix pipes.
 
 ## Installation
 
+Install with Homebrew:
+
+```sh
+brew install zaubermaerchen/tap/sluice
+```
+
 Install the latest source version with Go:
 
 ```sh
