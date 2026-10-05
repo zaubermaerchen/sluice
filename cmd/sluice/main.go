@@ -85,7 +85,7 @@ func run(stdout, stderr io.Writer, args []string) int {
 
 func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	fs := flag.NewFlagSet("sluice", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 
 	showDescription := fs.Bool("describe", false, "show machine-readable self-description")
 	showVersion := fs.Bool("version", false, "show version")
@@ -97,7 +97,8 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	fs.Var(&openValue, "open", "event that opens the sluice")
 	fs.Var(&closeValue, "close", "event that closes the sluice")
 	fs.Var(&eventsFDValue, "events-fd", "file descriptor for JSONL lifecycle events")
-	fs.Usage = func() {
+	printHelp := func() {
+		fs.SetOutput(stdout)
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
 		fmt.Fprintln(fs.Output(), "  sluice [--mode block|discard] [--events-fd N] --open EVENT --close EVENT open|closed")
 		fmt.Fprintln(fs.Output(), "")
@@ -117,14 +118,38 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintln(fs.Output(), "  sluice --open signal:USR1 --close signal:USR1 closed")
 		fmt.Fprintln(fs.Output(), "  sluice --open duration:5s --close duration:10s closed")
 		fmt.Fprintln(fs.Output(), "")
+		var defaults strings.Builder
+		fs.SetOutput(&defaults)
 		fs.PrintDefaults()
+		fmt.Fprint(stdout, strings.TrimPrefix(strings.ReplaceAll("\n"+defaults.String(), "\n  -", "\n  --"), "\n"))
+		fmt.Fprintln(stdout, "  --help\n    \tshow help (alias -h)")
+		fs.SetOutput(io.Discard)
 	}
 
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
+	// Help must win even when parsing would stop at a state or an earlier error.
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "--help" || name == "-h" || name == "-help" || name == "--h" {
+			printHelp()
 			return 0
 		}
+	}
+	fs.Usage = func() {}
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			printHelp()
+			return 0
+		}
+		fmt.Fprintf(stderr, "sluice: %s\nTry 'sluice --help' for more information.\n", longOptionDiagnostic(err.Error()))
 		return 2
+	}
+
+	for _, arg := range fs.Args()[min(1, len(fs.Args())):] {
+		if len(arg) > 1 && strings.HasPrefix(arg, "-") {
+			name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+			fmt.Fprintf(stderr, "sluice: argument order: option --%s must precede the initial state\n", name)
+			return 2
+		}
 	}
 
 	// Keep standalone meta commands as short circuits so they remain usable without
@@ -138,7 +163,6 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	if describeSpecified {
 		if !*showDescription || len(args) != 1 || len(fs.Args()) != 0 {
 			fmt.Fprintln(stderr, "sluice: --describe must be used alone and set to true")
-			fs.Usage()
 			return 2
 		}
 		if err := printDescription(stdout); err != nil {
@@ -150,7 +174,6 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	if versionSpecified {
 		if !*showVersion || len(args) != 1 || len(fs.Args()) != 0 {
 			fmt.Fprintln(stderr, "sluice: --version must be used alone and set to true")
-			fs.Usage()
 			return 2
 		}
 		fmt.Fprintf(stdout, "sluice %s\n", version)
@@ -160,18 +183,31 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	cfg, err := parseConfigWithEventsFD(modeValue, openValue, closeValue, eventsFDValue, fs.Args())
 	if err != nil {
 		fmt.Fprintf(stderr, "sluice: %v\n", err)
-		fs.Usage()
 		return 2
 	}
 	if cfg.eventsFDSet {
 		if err := validateEventDescriptor(cfg.eventsFD); err != nil {
 			fmt.Fprintf(stderr, "sluice: invalid event file descriptor %d: %v\n", cfg.eventsFD, err)
-			fs.Usage()
 			return 2
 		}
 	}
 
 	return runStateMachine(stdin, stdout, stderr, cfg)
+}
+
+// Go's parser accepts either dash spelling; diagnostics use the documented one.
+func longOptionDiagnostic(message string) string {
+	for _, prefix := range []string{"flag provided but not defined: -", "flag needs an argument: -"} {
+		if strings.HasPrefix(message, prefix) {
+			return strings.Replace(message, prefix, prefix+"-", 1)
+		}
+	}
+	for _, marker := range []string{" for flag -", " for -"} {
+		if index := strings.LastIndex(message, marker); index >= 0 {
+			return message[:index] + strings.Replace(message[index:], marker, marker+"-", 1)
+		}
+	}
+	return message
 }
 
 func parseConfig(modeValue, openValue, closeValue singleValue, args []string) (config, error) {
