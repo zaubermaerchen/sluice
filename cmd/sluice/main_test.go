@@ -591,6 +591,17 @@ func TestRun_Help(t *testing.T) {
 			if strings.Count(stdout.String(), "Usage of sluice:") != 1 {
 				t.Fatalf("expected one usage heading: %q", stdout.String())
 			}
+			for _, text := range []string{
+				"\n  --mode MODE\n",
+				"\n  --open EVENT\n",
+				"\n  --close EVENT\n",
+				"\n  --events-fd N\n",
+				"Unix file descriptor or inherited Windows HANDLE",
+			} {
+				if !strings.Contains(stdout.String(), text) {
+					t.Errorf("help missing %q: %s", text, &stdout)
+				}
+			}
 			for _, line := range strings.Split(stdout.String(), "\n") {
 				if strings.HasPrefix(line, "  -") && !strings.HasPrefix(line, "  --") {
 					t.Errorf("single-dash option in help: %q", line)

@@ -140,7 +140,8 @@ order. The initial state and EOF do not produce events. Timestamps are UTC in
 RFC3339Nano format. The descriptor is duplicated and remains owned by the
 caller. On Unix, it must be a writable FIFO or socket that is already in
 `O_NONBLOCK` mode. On Windows, it must be a named pipe that is already in
-`PIPE_NOWAIT` mode. `sluice` checks this at startup and exits with status 2
+`PIPE_NOWAIT` mode; `N` is the numeric value of its inherited HANDLE.
+`sluice` checks this at startup and exits with status 2
 before reading stdin when the descriptor is unsuitable. Keep the mode enabled
 while `sluice` is running because the duplicate shares the descriptor's open
 file description; `sluice` does not change the caller's descriptor flags.
