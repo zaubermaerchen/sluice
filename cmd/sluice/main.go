@@ -185,13 +185,6 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 		fmt.Fprintf(stderr, "sluice: %v\n", err)
 		return 2
 	}
-	if cfg.eventsFDSet {
-		if err := validateEventDescriptor(cfg.eventsFD); err != nil {
-			fmt.Fprintf(stderr, "sluice: invalid event file descriptor %d: %v\n", cfg.eventsFD, err)
-			return 2
-		}
-	}
-
 	return runStateMachine(stdin, stdout, stderr, cfg)
 }
 
