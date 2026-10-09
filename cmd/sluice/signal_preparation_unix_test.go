@@ -23,6 +23,7 @@ func TestSignalPreparationLifecycle(t *testing.T) {
 		"configuration-error", "event-fd-error", "event-setup-error", "before-arm", "signal-transitions", "event-transitions",
 	} {
 		t.Run(scenario, func(t *testing.T) {
+			t.Parallel() // Each scenario runs in a child process with isolated signal state.
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSignalPreparationChild$", "-test.v")
