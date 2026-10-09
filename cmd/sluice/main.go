@@ -93,10 +93,10 @@ func runWithIO(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	var openValue singleValue
 	var closeValue singleValue
 	var eventsFDValue singleValue
-	fs.Var(&modeValue, "mode", "stream mode (block|discard)")
-	fs.Var(&openValue, "open", "event that opens the sluice")
-	fs.Var(&closeValue, "close", "event that closes the sluice")
-	fs.Var(&eventsFDValue, "events-fd", "file descriptor for JSONL lifecycle events")
+	fs.Var(&modeValue, "mode", "stream mode `MODE` (block|discard)")
+	fs.Var(&openValue, "open", "open on `EVENT`")
+	fs.Var(&closeValue, "close", "close on `EVENT`")
+	fs.Var(&eventsFDValue, "events-fd", "`N` is the Unix file descriptor or inherited Windows HANDLE for JSONL lifecycle events")
 	printHelp := func() {
 		fs.SetOutput(stdout)
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
