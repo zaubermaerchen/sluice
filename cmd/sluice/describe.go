@@ -149,7 +149,7 @@ func newDescription() description {
 					Name:          "signal",
 					Syntax:        []string{"signal:USR1", "signal:SIGUSR1", "signal:USR2", "signal:SIGUSR2"},
 					Supported:     signalsSupportedOnPlatform(),
-					UnsupportedOn: []string{"js", "plan9", "wasip1", "windows", "zos"},
+					UnsupportedOn: []string{"js", "plan9", "wasip1", "windows"},
 				},
 				{
 					Name:        "duration",
