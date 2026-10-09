@@ -6,8 +6,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"go/build"
 	"io"
 	"os"
+	"os/exec"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -59,6 +63,60 @@ func TestRun_DescribeDurationAndEventRateCautionsMatchREADME(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestRun_DescribeSignalPlatformsMatchBuildConstraints(t *testing.T) {
+	platforms, err := exec.Command("go", "tool", "dist", "list").Output()
+	if err != nil {
+		t.Fatalf("go tool dist list: %v", err)
+	}
+	seen := make(map[string]bool)
+	var wantUnsupported []string
+	for _, platform := range strings.Fields(string(platforms)) {
+		goos, goarch, ok := strings.Cut(platform, "/")
+		if !ok {
+			t.Fatalf("invalid Go platform %q", platform)
+		}
+		if seen[goos] {
+			continue
+		}
+		seen[goos] = true
+		context := build.Default
+		context.GOOS, context.GOARCH = goos, goarch
+		supported, err := context.MatchFile(".", "signal_unix.go")
+		if err != nil {
+			t.Fatalf("match signal_unix.go for %s: %v", platform, err)
+		}
+		if !supported {
+			wantUnsupported = append(wantUnsupported, goos)
+		}
+	}
+	sort.Strings(wantUnsupported)
+
+	var output, diagnostics bytes.Buffer
+	if got := runWithIO(&trackingReader{}, &output, &diagnostics, []string{"--describe"}); got != 0 {
+		t.Fatalf("runWithIO() exit code = %d, want 0; diagnostics = %q", got, diagnostics.String())
+	}
+	var document description
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, form := range document.CLISchema.EventForms {
+		if form.Name != "signal" {
+			continue
+		}
+		gotUnsupported := append([]string(nil), form.UnsupportedOn...)
+		sort.Strings(gotUnsupported)
+		if !describeEqualStrings(gotUnsupported, wantUnsupported) {
+			t.Errorf("signal unsupported_on = %v, want build-constraint complement %v", gotUnsupported, wantUnsupported)
+		}
+		wantSupported := !describeContainsString(wantUnsupported, runtime.GOOS)
+		if form.Supported != wantSupported {
+			t.Errorf("signal supported = %v, want %v on %s", form.Supported, wantSupported, runtime.GOOS)
+		}
+		return
+	}
+	t.Fatal("description missing signal event form")
 }
 
 func TestRun_DescribeEmitsFixedJSONWithoutRuntimeProcessing(t *testing.T) {
@@ -263,9 +321,6 @@ func TestRun_DescribeMetadataDescribesCurrentCLIAndRuntime(t *testing.T) {
 	}
 	if document.CLISchema.EventForms[0].Supported != signalsSupportedOnPlatform() {
 		t.Fatalf("signal support = %v, want %v", document.CLISchema.EventForms[0].Supported, signalsSupportedOnPlatform())
-	}
-	if !describeContainsString(document.CLISchema.EventForms[0].UnsupportedOn, "zos") {
-		t.Errorf("signal unsupported_on = %#v, missing zos", document.CLISchema.EventForms[0].UnsupportedOn)
 	}
 	if !document.CLISchema.EventForms[0].Supported {
 		if len(document.CLISchema.EventForms[0].UnsupportedOn) == 0 {
